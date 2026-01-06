@@ -1137,6 +1137,149 @@ async def get_template_preview(template_id: str) -> str:
         return f"Error retrieving template content {template_id}: {str(e)}"
 
 
+# Media Management Tools
+@mcp.tool()
+async def get_media_list() -> str:
+    """
+    Get all media files from Listmonk.
+
+    Returns a list of all uploaded media with their IDs, filenames, URLs, and metadata.
+    """
+    async def _get_media_logic() -> str:
+        client = get_client()
+        result = await client.get_media()
+
+        data = result.get("data", [])
+
+        if not data:
+            return "No media files found."
+
+        media_items = []
+        for media in data:
+            created = media.get('created_at', 'Unknown')[:10]  # Just the date part
+            media_items.append(
+                f"- ID: {media.get('id')} | {media.get('filename')} | "
+                f"Title: {media.get('title', 'No title')} | "
+                f"Size: {media.get('size', 0)} bytes | "
+                f"Created: {created}\n"
+                f"  URL: {media.get('uri', 'No URL')}"
+            )
+
+        return f"Found {len(data)} media files:\n" + "\n".join(media_items)
+
+    return await safe_execute_async(_get_media_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def upload_media_file(
+    file_path: str,
+    title: str | None = None
+) -> str:
+    """
+    Upload a media file to Listmonk.
+
+    Args:
+        file_path: Absolute path to the image file to upload
+        title: Optional title/description for the media (defaults to filename)
+
+    Returns:
+        Success message with the uploaded file's URL
+    """
+    async def _upload_media_logic() -> str:
+        client = get_client()
+        result = await client.upload_media(file_path, title)
+
+        media_data = result.get("data", {})
+        media_id = media_data.get("id", "unknown")
+        uri = media_data.get("uri", "No URL")
+        filename = media_data.get("filename", "unknown")
+
+        return f"Successfully uploaded '{filename}' (ID: {media_id})\nURL: {uri}"
+
+    return await safe_execute_async(_upload_media_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def rename_media(media_id: int, new_title: str) -> str:
+    """
+    Rename/update the title of a media file.
+
+    Args:
+        media_id: ID of the media file to rename
+        new_title: New title/description for the media file
+
+    Returns:
+        Success message
+    """
+    async def _rename_media_logic() -> str:
+        client = get_client()
+        await client.update_media(media_id, new_title)
+
+        return f"Successfully renamed media {media_id} to '{new_title}'"
+
+    return await safe_execute_async(_rename_media_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_media_file(media_id: int) -> str:
+    """
+    Delete a media file from Listmonk.
+
+    Args:
+        media_id: ID of the media file to delete
+
+    Returns:
+        Success message
+    """
+    async def _delete_media_logic() -> str:
+        client = get_client()
+        await client.delete_media(media_id)
+
+        return f"Successfully deleted media {media_id}"
+
+    return await safe_execute_async(_delete_media_logic)  # type: ignore[no-any-return]
+
+
+# Media Resources
+@mcp.resource("listmonk://media")
+async def list_media_files() -> str:
+    """List all media files with details."""
+    try:
+        client = get_client()
+        result = await client.get_media()
+
+        data = result.get("data", [])
+
+        if not data:
+            return "# Media Files\n\nNo media files found."
+
+        media_list = []
+        for media in data:
+            size_kb = media.get('size', 0) / 1024
+            created = media.get('created_at', 'Unknown')
+            media_list.append(
+                f"- **{media.get('filename')}** (ID: {media.get('id')})\n"
+                f"  - Title: {media.get('title', 'No title')}\n"
+                f"  - Size: {size_kb:.1f} KB\n"
+                f"  - Created: {created}\n"
+                f"  - URL: {media.get('uri', 'No URL')}"
+            )
+
+        media_items = "\n\n".join(media_list)
+
+        return f"""# Media Files
+
+**Total Files:** {len(data)}
+
+{media_items}
+
+*Use upload_media_file to add new files, rename_media to update titles, or delete_media_file to remove files.*
+"""
+
+    except ListmonkAPIError as e:
+        return f"Error retrieving media files: {str(e)}"
+
+
 # CLI application
 cli_app = typer.Typer(
     name="listmonk-mcp",

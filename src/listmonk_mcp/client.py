@@ -437,6 +437,91 @@ class ListmonkClient:
         }
         return await self._request("POST", "/api/tx", json_data=payload)
 
+    # Media Operations
+    async def get_media(self) -> dict[str, Any]:
+        """Get all media files."""
+        return await self._request("GET", "/api/media")
+
+    async def upload_media(self, file_path: str, title: str | None = None) -> dict[str, Any]:
+        """Upload a media file.
+
+        Args:
+            file_path: Absolute path to the file to upload
+            title: Optional title for the media file (defaults to filename)
+
+        Returns:
+            Dict containing the uploaded media data including URL
+        """
+        import os
+        from pathlib import Path
+
+        client = self._get_client()
+        url = self._build_url("/api/media")
+
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise ListmonkAPIError(f"File not found: {file_path}")
+
+        # Determine content type from file extension
+        content_types = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.svg': 'image/svg+xml',
+        }
+        ext = file_path_obj.suffix.lower()
+        content_type = content_types.get(ext, 'application/octet-stream')
+
+        # Use filename as title if not provided
+        if title is None:
+            title = file_path_obj.name
+
+        # Read file content
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+
+        # Prepare multipart form data
+        files = {
+            'file': (file_path_obj.name, file_content, content_type)
+        }
+        data = {}
+        if title:
+            data['title'] = title
+
+        try:
+            # Remove Content-Type header for multipart, httpx will set it automatically
+            headers = {
+                "Authorization": f"token {self.config.username}:{self.config.password}",
+                "User-Agent": "Listmonk-MCP-Server/0.1.0",
+                "Accept": "application/json",
+            }
+
+            response = await client.post(url, files=files, data=data, headers=headers)
+            return await self._handle_response(response)
+
+        except httpx.RequestError as e:
+            raise ListmonkAPIError(f"Media upload failed: {str(e)}") from e
+
+    async def update_media(self, media_id: int, title: str) -> dict[str, Any]:
+        """Update media file metadata (rename).
+
+        Args:
+            media_id: ID of the media file
+            title: New title for the media file
+        """
+        data = {"title": title}
+        return await self._request("PUT", f"/api/media/{media_id}", json_data=data)
+
+    async def delete_media(self, media_id: int) -> dict[str, Any]:
+        """Delete a media file.
+
+        Args:
+            media_id: ID of the media file to delete
+        """
+        return await self._request("DELETE", f"/api/media/{media_id}")
+
 
 async def create_client(config: Config) -> ListmonkClient:
     """Create and connect a Listmonk client."""

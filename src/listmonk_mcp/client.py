@@ -396,14 +396,23 @@ class ListmonkClient:
         body: str | None = None,
         is_default: bool | None = None
     ) -> dict[str, Any]:
-        """Update an existing template."""
-        data: dict[str, Any] = {}
-        if name is not None:
-            data["name"] = name
-        if body is not None:
-            data["body"] = body
-        if is_default is not None:
-            data["is_default"] = is_default
+        """Update an existing template.
+
+        Fetches the current template first and merges changes, as Listmonk
+        requires all fields in PUT requests.
+        """
+        # Fetch current template to get all existing values
+        current = await self.get_template(template_id)
+        template_data = current.get("data", {})
+
+        # Build update data with current values as defaults
+        # IMPORTANT: type must be included, otherwise Listmonk validates as transactional template
+        data: dict[str, Any] = {
+            "name": name if name is not None else template_data.get("name", ""),
+            "type": template_data.get("type", "campaign"),
+            "body": body if body is not None else template_data.get("body", ""),
+            "is_default": is_default if is_default is not None else template_data.get("is_default", False),
+        }
 
         return await self._request("PUT", f"/api/templates/{template_id}", json_data=data)
 

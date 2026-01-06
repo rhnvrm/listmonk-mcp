@@ -309,7 +309,7 @@ async def get_mailing_lists() -> str:
     """
     Get all mailing lists.
 
-    Returns a list of all mailing lists with their IDs, names, subscriber counts, and types.
+    Returns a list of all mailing lists with their IDs, UUIDs, names, subscriber counts, and types.
     """
     async def _get_lists_logic() -> str:
         client = get_client()
@@ -325,6 +325,7 @@ async def get_mailing_lists() -> str:
         for lst in lists:
             list_items.append(
                 f"- ID: {lst.get('id')} | {lst.get('name')} | "
+                f"UUID: {lst.get('uuid')} | "
                 f"Subscribers: {lst.get('subscriber_count', 0)} | "
                 f"Type: {lst.get('type', 'unknown')}"
             )
@@ -490,6 +491,36 @@ async def get_campaigns(
         return f"Found {total} campaigns (showing {len(campaigns)}):\n" + "\n".join(campaign_items)
 
     return await safe_execute_async(_get_campaigns_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_campaign(campaign_id: int) -> str:
+    """
+    Get a specific campaign by ID including its full body content.
+
+    Args:
+        campaign_id: ID of the campaign to retrieve
+    """
+    async def _get_campaign_logic() -> str:
+        client = get_client()
+        result = await client.get_campaign(campaign_id)
+
+        campaign = result.get("data", {})
+        body = campaign.get('body', 'No content')
+        lists_str = ", ".join(str(lst.get("id")) for lst in campaign.get("lists", []))
+
+        return f"""Campaign ID: {campaign.get('id')}
+Name: {campaign.get('name')}
+Subject: {campaign.get('subject')}
+Status: {campaign.get('status')}
+Template ID: {campaign.get('template_id')}
+Lists: [{lists_str}]
+Content Type: {campaign.get('content_type', 'richtext')}
+
+Body:
+{body}"""
+
+    return await safe_execute_async(_get_campaign_logic)  # type: ignore[no-any-return]
 
 
 @mcp.tool()
@@ -842,6 +873,62 @@ async def get_list_subscribers_resource(list_id: str) -> str:
 
 
 # Template Management Tools
+@mcp.tool()
+async def get_templates() -> str:
+    """
+    Get all email templates.
+
+    Returns a list of all templates with their IDs, names, types, and default status.
+    """
+    async def _get_templates_logic() -> str:
+        client = get_client()
+        result = await client.get_templates()
+
+        data = result.get("data", {})
+        templates = data.get("results", []) if isinstance(data, dict) else data
+
+        if not templates:
+            return "No templates found."
+
+        template_items = []
+        for t in templates:
+            default_marker = " (DEFAULT)" if t.get('is_default', False) else ""
+            template_items.append(
+                f"- ID: {t.get('id')} | {t.get('name')} | "
+                f"Type: {t.get('type', 'campaign')}{default_marker}"
+            )
+
+        return f"Found {len(templates)} templates:\n" + "\n".join(template_items)
+
+    return await safe_execute_async(_get_templates_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_template(template_id: int) -> str:
+    """
+    Get a specific template by ID including its full body content.
+
+    Args:
+        template_id: ID of the template to retrieve
+    """
+    async def _get_template_logic() -> str:
+        client = get_client()
+        result = await client.get_template(template_id)
+
+        template = result.get("data", {})
+        body = template.get('body', 'No content')
+
+        return f"""Template ID: {template.get('id')}
+Name: {template.get('name')}
+Type: {template.get('type', 'campaign')}
+Default: {template.get('is_default', False)}
+
+Body:
+{body}"""
+
+    return await safe_execute_async(_get_template_logic)  # type: ignore[no-any-return]
+
+
 @mcp.tool()
 async def create_template(
     name: str,

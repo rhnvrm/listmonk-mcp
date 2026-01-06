@@ -270,8 +270,8 @@ class ListmonkClient:
 
     async def get_list_subscribers(self, list_id: int, page: int = 1, per_page: int = 20) -> dict[str, Any]:
         """Get subscribers for a specific list."""
-        params = {"page": page, "per_page": per_page}
-        return await self._request("GET", f"/api/lists/{list_id}/subscribers", params=params)
+        params = {"page": page, "per_page": per_page, "list_id": list_id}
+        return await self._request("GET", "/api/subscribers", params=params)
 
     # Campaign Operations
     async def get_campaigns(
@@ -328,14 +328,22 @@ class ListmonkClient:
         body: str | None = None,
         tags: list[str] | None = None
     ) -> dict[str, Any]:
-        """Update an existing campaign."""
-        data: dict[str, Any] = {}
+        """Update an existing campaign.
+
+        If lists is not provided, fetches the current campaign's lists to preserve them.
+        """
+        # If lists not provided, fetch current campaign to get existing lists
+        if lists is None:
+            current = await self.get_campaign(campaign_id)
+            campaign_data = current.get("data", {})
+            current_lists = campaign_data.get("lists", [])
+            lists = [lst.get("id") for lst in current_lists if lst.get("id")]
+
+        data: dict[str, Any] = {"lists": lists}
         if name is not None:
             data["name"] = name
         if subject is not None:
             data["subject"] = subject
-        if lists is not None:
-            data["lists"] = lists
         if body is not None:
             data["body"] = body
         if tags is not None:

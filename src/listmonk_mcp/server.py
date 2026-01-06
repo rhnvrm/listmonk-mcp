@@ -305,6 +305,36 @@ async def list_subscribers() -> str:
 
 # List Management Tools
 @mcp.tool()
+async def get_mailing_lists() -> str:
+    """
+    Get all mailing lists.
+
+    Returns a list of all mailing lists with their IDs, names, subscriber counts, and types.
+    """
+    async def _get_lists_logic() -> str:
+        client = get_client()
+        result = await client.get_lists()
+
+        data = result.get("data", {})
+        lists = data.get("results", []) if isinstance(data, dict) else data
+
+        if not lists:
+            return "No mailing lists found."
+
+        list_items = []
+        for lst in lists:
+            list_items.append(
+                f"- ID: {lst.get('id')} | {lst.get('name')} | "
+                f"Subscribers: {lst.get('subscriber_count', 0)} | "
+                f"Type: {lst.get('type', 'unknown')}"
+            )
+
+        return f"Found {len(lists)} mailing lists:\n" + "\n".join(list_items)
+
+    return await safe_execute_async(_get_lists_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
 async def create_mailing_list(
     name: str,
     type: str = "public",
@@ -414,14 +444,54 @@ async def get_list_subscribers_tool(
             per_page=per_page
         )
 
-        subscribers = result.get("data", [])
-        total = result.get("total", 0)
+        data = result.get("data", {})
+        subscribers = data.get("results", []) if isinstance(data, dict) else data
+        total = data.get("total", 0) if isinstance(data, dict) else len(subscribers)
         return f"Successfully retrieved {len(subscribers)} subscribers for list {list_id} (Total: {total}, Page: {page})"
 
     return await safe_execute_async(_get_list_subscribers_logic)  # type: ignore[no-any-return]
 
 
 # Campaign Management Tools
+@mcp.tool()
+async def get_campaigns(
+    status: str | None = None,
+    page: int = 1,
+    per_page: int = 20
+) -> str:
+    """
+    Get all campaigns with optional status filter.
+
+    Args:
+        status: Filter by status (draft, running, paused, finished, cancelled)
+        page: Page number for pagination
+        per_page: Number of campaigns per page
+    """
+    async def _get_campaigns_logic() -> str:
+        client = get_client()
+        result = await client.get_campaigns(page=page, per_page=per_page, status=status)
+
+        data = result.get("data", {})
+        campaigns = data.get("results", []) if isinstance(data, dict) else data
+        total = data.get("total", 0) if isinstance(data, dict) else len(campaigns)
+
+        if not campaigns:
+            return "No campaigns found."
+
+        campaign_items = []
+        for c in campaigns:
+            lists_str = ", ".join(str(lst.get("id")) for lst in c.get("lists", []))
+            campaign_items.append(
+                f"- ID: {c.get('id')} | {c.get('name')} | "
+                f"Status: {c.get('status', 'unknown')} | "
+                f"Lists: [{lists_str}]"
+            )
+
+        return f"Found {total} campaigns (showing {len(campaigns)}):\n" + "\n".join(campaign_items)
+
+    return await safe_execute_async(_get_campaigns_logic)  # type: ignore[no-any-return]
+
+
 @mcp.tool()
 async def create_campaign(
     name: str,

@@ -358,4 +358,6 @@ async def safe_execute_async(func: Any, *args: Any, **kwargs: Any) -> Any:
         error_details = convert_listmonk_api_error(e).to_dict()
         return f"Error: {error_details['error_type']} - {error_details['message']}"
     except Exception as e:
-        return f"Unexpected error: {str(e)}"
+        import traceback
+        tb = traceback.format_exc()
+        return f"Unexpected error: {str(e)}\n\nTraceback:\n{tb}"

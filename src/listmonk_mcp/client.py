@@ -42,7 +42,7 @@ class ListmonkClient:
         auth_token = f"{self.config.username}:{self.config.password}"
 
         self._client = AsyncClient(
-            timeout=httpx.Timeout(self.config.timeout),
+            timeout=self.config.timeout,
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
             headers={
                 "User-Agent": "Listmonk-MCP-Server/0.1.0",
@@ -491,14 +491,20 @@ class ListmonkClient:
             data['title'] = title
 
         try:
-            # Remove Content-Type header for multipart, httpx will set it automatically
-            headers = {
-                "Authorization": f"token {self.config.username}:{self.config.password}",
-                "User-Agent": "Listmonk-MCP-Server/0.1.0",
-                "Accept": "application/json",
-            }
+            # Create a new client without Content-Type header for multipart upload
+            # The client will automatically set multipart/form-data with boundary
+            upload_client = AsyncClient(
+                timeout=self.config.timeout,
+                headers={
+                    "Authorization": f"token {self.config.username}:{self.config.password}",
+                    "User-Agent": "Listmonk-MCP-Server/0.1.0",
+                    "Accept": "application/json",
+                    # No Content-Type - will be set automatically by httpx for multipart
+                }
+            )
 
-            response = await client.post(url, files=files, data=data, headers=headers)
+            response = await upload_client.post(url, files=files, data=data)
+            await upload_client.aclose()
             return await self._handle_response(response)
 
         except httpx.RequestError as e:

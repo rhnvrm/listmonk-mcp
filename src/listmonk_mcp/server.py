@@ -428,7 +428,7 @@ async def get_list_subscribers_tool(
     list_id: int,
     page: int = 1,
     per_page: int = 20
-) -> str:
+) -> dict[str, Any]:
     """
     Get subscribers for a specific mailing list.
 
@@ -437,7 +437,7 @@ async def get_list_subscribers_tool(
         page: Page number for pagination
         per_page: Number of subscribers per page
     """
-    async def _get_list_subscribers_logic() -> str:
+    async def _get_list_subscribers_logic() -> dict[str, Any]:
         client = get_client()
         result = await client.get_list_subscribers(
             list_id=list_id,
@@ -448,7 +448,15 @@ async def get_list_subscribers_tool(
         data = result.get("data", {})
         subscribers = data.get("results", []) if isinstance(data, dict) else data
         total = data.get("total", 0) if isinstance(data, dict) else len(subscribers)
-        return f"Successfully retrieved {len(subscribers)} subscribers for list {list_id} (Total: {total}, Page: {page})"
+        return {
+            "success": True,
+            "list_id": list_id,
+            "page": page,
+            "per_page": per_page,
+            "count": len(subscribers),
+            "total": total,
+            "subscribers": subscribers,
+        }
 
     return await safe_execute_async(_get_list_subscribers_logic)  # type: ignore[no-any-return]
 

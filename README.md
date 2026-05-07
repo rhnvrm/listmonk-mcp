@@ -25,7 +25,7 @@ This server will bridge the MCP protocol with Listmonk's REST API, providing a s
 ## Features
 
 - **Complete Listmonk API Coverage**: All major Listmonk operations supported
-- **18 MCP Tools**: Comprehensive subscriber, list, campaign, and template management
+- **70 MCP Tools**: Subscriber, list, campaign, template, media, bounce, import, settings, and maintenance management — full campaign lifecycle (test/send/pause/cancel/delete/archive/analytics), bounce handling, bulk operations, and admin endpoints
 - **MCP Resources**: Easy access to subscriber, list, campaign, and template data
 - **Async Operations**: Built with modern async/await patterns
 - **Type Safety**: Full Pydantic model validation

@@ -204,6 +204,416 @@ async def change_subscriber_status(subscriber_id: int, status: str) -> str:
     return await safe_execute_async(_change_status_logic)  # type: ignore[no-any-return]
 
 
+@mcp.tool()
+async def patch_subscriber(
+    subscriber_id: int,
+    action: str,
+    target_list_ids: list[int] | None = None,
+    status: str | None = None,
+) -> str:
+    """
+    Patch a subscriber's lists or status (more surgical than update_subscriber).
+
+    Args:
+        subscriber_id: ID of the subscriber to patch.
+        action: One of "add", "remove", "unsubscribe" (lists) or "blocklist" / "enable" (status).
+        target_list_ids: List IDs (for list-related actions).
+        status: New status (for status-related actions).
+    """
+    async def _patch_logic() -> str:
+        client = get_client()
+        await client.patch_subscriber(subscriber_id, action, target_list_ids, status)
+        return f"Successfully patched subscriber {subscriber_id} (action={action})"
+
+    return await safe_execute_async(_patch_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def subscriber_send_optin(subscriber_id: int) -> str:
+    """
+    Send a fresh opt-in confirmation email to a subscriber.
+
+    Args:
+        subscriber_id: ID of the subscriber.
+    """
+    async def _optin_logic() -> str:
+        client = get_client()
+        await client.subscriber_send_optin(subscriber_id)
+        return f"Successfully sent opt-in email to subscriber {subscriber_id}"
+
+    return await safe_execute_async(_optin_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def blocklist_subscriber(subscriber_id: int) -> str:
+    """
+    Blocklist a single subscriber (cannot be re-subscribed without manual action).
+
+    Args:
+        subscriber_id: ID of the subscriber to blocklist.
+    """
+    async def _blocklist_logic() -> str:
+        client = get_client()
+        await client.blocklist_subscriber(subscriber_id)
+        return f"Successfully blocklisted subscriber {subscriber_id}"
+
+    return await safe_execute_async(_blocklist_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def blocklist_subscribers(subscriber_ids: list[int]) -> str:
+    """
+    Blocklist multiple subscribers in one call.
+
+    Args:
+        subscriber_ids: List of subscriber IDs to blocklist.
+    """
+    async def _blocklist_many_logic() -> str:
+        client = get_client()
+        await client.blocklist_subscribers(subscriber_ids)
+        return f"Successfully blocklisted {len(subscriber_ids)} subscriber(s)"
+
+    return await safe_execute_async(_blocklist_many_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def manage_subscriber_lists(
+    subscriber_ids: list[int],
+    target_list_ids: list[int],
+    action: str,
+    status: str | None = None,
+) -> str:
+    """
+    Bulk add / remove / unsubscribe subscribers from lists.
+
+    Args:
+        subscriber_ids: Subscriber IDs to update.
+        target_list_ids: Lists to operate on.
+        action: One of "add", "remove", "unsubscribe".
+        status: Optional subscription status (e.g. "confirmed", "unconfirmed").
+    """
+    async def _manage_lists_logic() -> str:
+        client = get_client()
+        await client.manage_subscriber_lists(subscriber_ids, target_list_ids, action, status)
+        return (
+            f"Successfully {action}ed {len(subscriber_ids)} subscriber(s) "
+            f"on {len(target_list_ids)} list(s)"
+        )
+
+    return await safe_execute_async(_manage_lists_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_subscriber_activity(subscriber_id: int) -> str:
+    """
+    Get a subscriber's activity log (opt-ins, bounces, list changes).
+
+    Args:
+        subscriber_id: ID of the subscriber.
+    """
+    async def _activity_logic() -> str:
+        client = get_client()
+        result = await client.get_subscriber_activity(subscriber_id)
+        events = result.get("data", [])
+        if not events:
+            return f"No activity recorded for subscriber {subscriber_id}"
+        rows = [
+            f"- {e.get('created_at', '?')} | {e.get('type', '?')} | {e.get('list_name') or e.get('subject') or ''}"
+            for e in events
+        ]
+        return f"Activity for subscriber {subscriber_id} ({len(events)} events):\n" + "\n".join(rows)
+
+    return await safe_execute_async(_activity_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_subscribers_by_query(query: str, list_ids: list[int] | None = None) -> str:
+    """
+    Delete subscribers matching an advanced SQL query expression.
+
+    Args:
+        query: Listmonk-style SQL query, e.g. "subscribers.status='disabled'".
+        list_ids: Optional restriction to specific list IDs.
+    """
+    async def _del_query_logic() -> str:
+        client = get_client()
+        await client.delete_subscribers_by_query(query, list_ids)
+        return f"Successfully ran query-delete (query={query!r})"
+
+    return await safe_execute_async(_del_query_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def blocklist_subscribers_by_query(query: str, list_ids: list[int] | None = None) -> str:
+    """
+    Blocklist subscribers matching an advanced SQL query expression.
+
+    Args:
+        query: Listmonk-style SQL query.
+        list_ids: Optional restriction to specific list IDs.
+    """
+    async def _bl_query_logic() -> str:
+        client = get_client()
+        await client.blocklist_subscribers_by_query(query, list_ids)
+        return f"Successfully ran query-blocklist (query={query!r})"
+
+    return await safe_execute_async(_bl_query_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def manage_subscriber_lists_by_query(
+    query: str,
+    target_list_ids: list[int],
+    action: str,
+    list_ids: list[int] | None = None,
+    status: str | None = None,
+) -> str:
+    """
+    Bulk add / remove / unsubscribe subscribers matching a query.
+
+    Args:
+        query: Listmonk-style SQL query.
+        target_list_ids: Lists to operate on.
+        action: One of "add", "remove", "unsubscribe".
+        list_ids: Optional restriction to specific source list IDs.
+        status: Optional subscription status.
+    """
+    async def _ml_query_logic() -> str:
+        client = get_client()
+        await client.manage_subscriber_lists_by_query(query, target_list_ids, action, list_ids, status)
+        return f"Successfully ran query-{action} on {len(target_list_ids)} list(s)"
+
+    return await safe_execute_async(_ml_query_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_subscriber_bounces(subscriber_id: int) -> str:
+    """
+    Get bounce records for a single subscriber.
+
+    Args:
+        subscriber_id: ID of the subscriber.
+    """
+    async def _sb_logic() -> str:
+        client = get_client()
+        result = await client.get_subscriber_bounces(subscriber_id)
+        bounces = result.get("data", [])
+        if not bounces:
+            return f"No bounces recorded for subscriber {subscriber_id}"
+        rows = [
+            f"- {b.get('created_at')} | {b.get('type')} | campaign {b.get('campaign_id', '-')} | {b.get('source', '?')}"
+            for b in bounces
+        ]
+        return f"Bounces for subscriber {subscriber_id} ({len(bounces)}):\n" + "\n".join(rows)
+
+    return await safe_execute_async(_sb_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_subscriber_bounces(subscriber_id: int) -> str:
+    """
+    Delete all bounce records for a single subscriber.
+
+    Args:
+        subscriber_id: ID of the subscriber.
+    """
+    async def _dsb_logic() -> str:
+        client = get_client()
+        await client.delete_subscriber_bounces(subscriber_id)
+        return f"Successfully cleared bounce history for subscriber {subscriber_id}"
+
+    return await safe_execute_async(_dsb_logic)  # type: ignore[no-any-return]
+
+
+# Bounce Management Tools
+@mcp.tool()
+async def list_bounces(
+    page: int = 1,
+    per_page: int = 20,
+    campaign_id: int | None = None,
+    source: str | None = None,
+) -> str:
+    """
+    List bounce records with pagination and filtering.
+
+    Args:
+        page: Page number.
+        per_page: Page size.
+        campaign_id: Optional campaign filter.
+        source: Optional source filter (e.g. "smtp", "webhook").
+    """
+    async def _list_bounces_logic() -> str:
+        client = get_client()
+        result = await client.get_bounces(page=page, per_page=per_page, campaign_id=campaign_id, source=source)
+        data = result.get("data", {})
+        bounces = data.get("results", []) if isinstance(data, dict) else data
+        total = data.get("total", 0) if isinstance(data, dict) else len(bounces)
+
+        if not bounces:
+            return "No bounces found."
+
+        rows = []
+        for b in bounces:
+            rows.append(
+                f"- ID: {b.get('id')} | {b.get('created_at')} | {b.get('type')} | "
+                f"sub {b.get('subscriber_id')} | campaign {b.get('campaign_id', '-')} | {b.get('source', '?')}"
+            )
+        return f"Found {total} bounces (showing {len(bounces)}):\n" + "\n".join(rows)
+
+    return await safe_execute_async(_list_bounces_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_bounce(bounce_id: int) -> str:
+    """
+    Get a single bounce record by ID.
+
+    Args:
+        bounce_id: ID of the bounce record.
+    """
+    async def _get_bounce_logic() -> str:
+        client = get_client()
+        result = await client.get_bounce(bounce_id)
+        b = result.get("data", {})
+        return (
+            f"Bounce {b.get('id')}\n"
+            f"Subscriber: {b.get('subscriber_id')} ({b.get('email', '?')})\n"
+            f"Campaign: {b.get('campaign_id', '-')}\n"
+            f"Type: {b.get('type')}\n"
+            f"Source: {b.get('source')}\n"
+            f"Created: {b.get('created_at')}\n\n"
+            f"Meta:\n{b.get('meta', {})}"
+        )
+
+    return await safe_execute_async(_get_bounce_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_bounce(bounce_id: int) -> str:
+    """
+    Delete a single bounce record.
+
+    Args:
+        bounce_id: ID of the bounce record.
+    """
+    async def _del_bounce_logic() -> str:
+        client = get_client()
+        await client.delete_bounce(bounce_id)
+        return f"Successfully deleted bounce {bounce_id}"
+
+    return await safe_execute_async(_del_bounce_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_bounces(bounce_ids: list[int] | None = None) -> str:
+    """
+    Delete bounce records. Pass an empty/None list to delete ALL bounces.
+
+    Args:
+        bounce_ids: Specific IDs to delete, or None/empty to delete all.
+    """
+    async def _del_bounces_logic() -> str:
+        client = get_client()
+        await client.delete_bounces(bounce_ids)
+        if bounce_ids:
+            return f"Successfully deleted {len(bounce_ids)} bounce(s)"
+        return "Successfully deleted ALL bounces"
+
+    return await safe_execute_async(_del_bounces_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def blocklist_bounced_subscribers(bounce_ids: list[int] | None = None) -> str:
+    """
+    Blocklist subscribers who appear in specific bounces (or all bounces if empty).
+
+    Args:
+        bounce_ids: Specific bounce IDs, or None/empty to blocklist subscribers from all bounces.
+    """
+    async def _blbb_logic() -> str:
+        client = get_client()
+        await client.blocklist_bounced_subscribers(bounce_ids)
+        scope = f"{len(bounce_ids)} specified bounces" if bounce_ids else "all bounces"
+        return f"Successfully blocklisted subscribers from {scope}"
+
+    return await safe_execute_async(_blbb_logic)  # type: ignore[no-any-return]
+
+
+# Subscriber Import Tools
+@mcp.tool()
+async def import_subscribers(
+    file_path: str,
+    list_ids: list[int],
+    mode: str = "subscribe",
+    delim: str = ",",
+    overwrite: bool = True,
+    subscription_status: str = "confirmed",
+) -> str:
+    """
+    Start a subscriber import from a CSV or .zip file.
+
+    Args:
+        file_path: Absolute path to a .csv or .zip file.
+        list_ids: Lists to subscribe imported users to.
+        mode: "subscribe" (default) or "blocklist".
+        delim: CSV delimiter (default ",").
+        overwrite: Whether to overwrite existing subscribers.
+        subscription_status: "confirmed" or "unconfirmed".
+    """
+    async def _import_logic() -> str:
+        client = get_client()
+        result = await client.import_subscribers(
+            file_path=file_path,
+            mode=mode,
+            list_ids=list_ids,
+            delim=delim,
+            overwrite=overwrite,
+            subscription_status=subscription_status,
+        )
+        d = result.get("data", {})
+        return f"Import started (status={d.get('status', '?')}, total={d.get('total', '?')})"
+
+    return await safe_execute_async(_import_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_import_status() -> str:
+    """Get the status of the current/last subscriber import."""
+    async def _status_logic() -> str:
+        client = get_client()
+        result = await client.get_import_status()
+        d = result.get("data", {})
+        return (
+            f"Status: {d.get('status', 'none')}\n"
+            f"Total: {d.get('total', 0)}\n"
+            f"Imported: {d.get('imported', 0)}"
+        )
+
+    return await safe_execute_async(_status_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_import_logs() -> str:
+    """Get logs from the current/last subscriber import."""
+    async def _logs_logic() -> str:
+        client = get_client()
+        result = await client.get_import_logs()
+        return f"Import logs:\n{result.get('data', '(no logs)')}"
+
+    return await safe_execute_async(_logs_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def stop_import() -> str:
+    """Stop the currently running subscriber import."""
+    async def _stop_logic() -> str:
+        client = get_client()
+        await client.stop_import()
+        return "Successfully stopped the running import"
+
+    return await safe_execute_async(_stop_logic)  # type: ignore[no-any-return]
+
+
 # Subscriber Resources
 @mcp.resource("listmonk://subscriber/{subscriber_id}")
 async def get_subscriber_by_id(subscriber_id: str) -> str:
@@ -638,6 +1048,159 @@ async def schedule_campaign(campaign_id: int, send_at: str) -> str:
     return await safe_execute_async(_schedule_campaign_logic)  # type: ignore[no-any-return]
 
 
+@mcp.tool()
+async def test_campaign(campaign_id: int, subscribers: list[str]) -> str:
+    """
+    Send a test of a campaign to specific email addresses without affecting list members.
+
+    Args:
+        campaign_id: ID of the campaign to test.
+        subscribers: Recipient emails. IMPORTANT: each must already exist as a
+            subscriber on this listmonk instance (the test handler looks them
+            up by email and skips unknown addresses). Add them via
+            add_subscriber first if needed.
+    """
+    async def _test_campaign_logic() -> str:
+        client = get_client()
+        await client.test_campaign(campaign_id, subscribers)
+        recipients = ", ".join(subscribers)
+        return f"Successfully queued test send of campaign {campaign_id} to: {recipients}"
+
+    return await safe_execute_async(_test_campaign_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def change_campaign_status(campaign_id: int, status: str) -> str:
+    """
+    Change a campaign's status.
+
+    Args:
+        campaign_id: ID of the campaign.
+        status: One of "draft", "scheduled", "running", "paused", "cancelled".
+    """
+    async def _change_status_logic() -> str:
+        client = get_client()
+        await client.change_campaign_status(campaign_id, status)
+        return f"Successfully changed campaign {campaign_id} status to '{status}'"
+
+    return await safe_execute_async(_change_status_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def archive_campaign(
+    campaign_id: int,
+    archive: bool = True,
+    archive_template_id: int | None = None,
+    archive_meta: dict[str, Any] | None = None,
+    archive_slug: str | None = None,
+) -> str:
+    """
+    Toggle whether a campaign appears on the public archive page.
+
+    Args:
+        campaign_id: ID of the campaign.
+        archive: True to publish to archive, False to remove.
+        archive_template_id: Template to use for the archive page (optional).
+        archive_meta: Extra metadata for the archive entry (optional).
+        archive_slug: URL slug for the archive page (optional).
+    """
+    async def _archive_logic() -> str:
+        client = get_client()
+        await client.archive_campaign(
+            campaign_id,
+            archive=archive,
+            archive_template_id=archive_template_id,
+            archive_meta=archive_meta,
+            archive_slug=archive_slug,
+        )
+        verb = "archived" if archive else "unarchived"
+        return f"Successfully {verb} campaign {campaign_id}"
+
+    return await safe_execute_async(_archive_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_campaign(campaign_id: int) -> str:
+    """
+    Delete a campaign permanently.
+
+    Args:
+        campaign_id: ID of the campaign to delete.
+    """
+    async def _delete_campaign_logic() -> str:
+        client = get_client()
+        await client.delete_campaign(campaign_id)
+        return f"Successfully deleted campaign {campaign_id}"
+
+    return await safe_execute_async(_delete_campaign_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def delete_campaigns(campaign_ids: list[int]) -> str:
+    """
+    Delete multiple campaigns in one call.
+
+    Args:
+        campaign_ids: List of campaign IDs to delete.
+    """
+    async def _delete_campaigns_logic() -> str:
+        client = get_client()
+        await client.delete_campaigns(campaign_ids)
+        return f"Successfully deleted {len(campaign_ids)} campaign(s): {campaign_ids}"
+
+    return await safe_execute_async(_delete_campaigns_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_running_campaign_stats() -> str:
+    """Get live stats for currently running campaigns (sent, to_send, rate, ETA)."""
+    async def _stats_logic() -> str:
+        client = get_client()
+        result = await client.get_running_campaign_stats()
+        data = result.get("data", [])
+        if not data:
+            return "No campaigns are currently running."
+
+        rows = []
+        for s in data:
+            rows.append(
+                f"- Campaign {s.get('id')} ({s.get('name', 'unknown')}) — "
+                f"sent: {s.get('sent', 0)}/{s.get('to_send', 0)} | "
+                f"rate: {s.get('rate', 0)}/min | "
+                f"net rate: {s.get('net_rate', 0)}/min | "
+                f"started: {s.get('started_at', 'unknown')}"
+            )
+        return f"Running campaigns ({len(data)}):\n" + "\n".join(rows)
+
+    return await safe_execute_async(_stats_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_campaign_analytics(
+    analytics_type: str,
+    campaign_ids: list[int],
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> str:
+    """
+    Get campaign analytics (views, clicks, links, or bounces).
+
+    Args:
+        analytics_type: One of "views", "clicks", "links", "bounces".
+        campaign_ids: Campaigns to fetch analytics for.
+        from_date: Optional ISO date lower bound (e.g. "2026-01-01").
+        to_date: Optional ISO date upper bound.
+    """
+    async def _analytics_logic() -> str:
+        client = get_client()
+        result = await client.get_campaign_analytics(
+            analytics_type, campaign_ids, from_date=from_date, to_date=to_date
+        )
+        return f"Analytics ({analytics_type}) for campaigns {campaign_ids}: {result.get('data', [])}"
+
+    return await safe_execute_async(_analytics_logic)  # type: ignore[no-any-return]
+
+
 # Campaign Resources
 @mcp.resource("listmonk://campaigns")
 async def list_campaigns() -> str:
@@ -1006,6 +1569,215 @@ async def delete_template(template_id: int) -> str:
         return f"Successfully deleted template {template_id}"
 
     return await safe_execute_async(_delete_template_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def set_default_template(template_id: int) -> str:
+    """
+    Mark a template as the default for its type.
+
+    Args:
+        template_id: ID of the template to set as default.
+    """
+    async def _set_default_logic() -> str:
+        client = get_client()
+        await client.set_default_template(template_id)
+        return f"Successfully set template {template_id} as default"
+
+    return await safe_execute_async(_set_default_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def preview_template_body(body: str, template_type: str = "campaign") -> str:
+    """
+    Render a preview of an unsaved template body.
+
+    Args:
+        body: Template HTML body.
+        template_type: One of "campaign" (default), "campaign_visual", "tx".
+    """
+    async def _preview_body_logic() -> str:
+        client = get_client()
+        result = await client.preview_template_body(body, template_type)
+        d = result.get("data", {})
+        rendered = d.get("preview") if isinstance(d, dict) else d
+        return f"# Template Preview\n\n{rendered}"
+
+    return await safe_execute_async(_preview_body_logic)  # type: ignore[no-any-return]
+
+
+# Settings & System Tools
+@mcp.tool()
+async def get_settings() -> str:
+    """
+    Get the full server settings document.
+
+    Note: secret fields (passwords, tokens) are masked as bullets in the response.
+    Do not PUT this back via update_settings — use update_setting for individual keys
+    or scrub secret-looking keys first.
+    """
+    async def _get_settings_logic() -> str:
+        client = get_client()
+        result = await client.get_settings()
+        return f"Settings:\n{result.get('data', {})}"
+
+    return await safe_execute_async(_get_settings_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def update_settings(settings: dict[str, Any]) -> str:
+    """
+    Replace the full server settings document.
+
+    WARNING: GET /api/settings masks secrets as bullets. PUTting that body back
+    overwrites real values with literal bullets. Strip any password/token/secret
+    keys from `settings` before calling this — or prefer `update_setting` for
+    a single key.
+    """
+    async def _update_settings_logic() -> str:
+        client = get_client()
+        await client.update_settings(settings)
+        return "Successfully updated settings"
+
+    return await safe_execute_async(_update_settings_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def update_setting(key: str, value: Any) -> str:
+    """
+    Update a single settings key (avoids the password-masking footgun).
+
+    Args:
+        key: Dotted setting key (e.g. "appearance.public.custom_css").
+        value: New value.
+    """
+    async def _update_one_logic() -> str:
+        client = get_client()
+        await client.update_setting(key, value)
+        return f"Successfully updated setting '{key}'"
+
+    return await safe_execute_async(_update_one_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def test_smtp_settings(settings: dict[str, Any]) -> str:
+    """
+    Send a test email through provided SMTP settings without persisting them.
+
+    Args:
+        settings: SMTP config with host/port/username/password/etc.
+    """
+    async def _test_smtp_logic() -> str:
+        client = get_client()
+        await client.test_smtp_settings(settings)
+        return "SMTP test send dispatched successfully"
+
+    return await safe_execute_async(_test_smtp_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def reload_app() -> str:
+    """Trigger a hot-reload of the Listmonk app (re-reads settings)."""
+    async def _reload_logic() -> str:
+        client = get_client()
+        await client.reload_app()
+        return "Successfully triggered app reload"
+
+    return await safe_execute_async(_reload_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_logs() -> str:
+    """Get recent server logs."""
+    async def _logs_logic() -> str:
+        client = get_client()
+        result = await client.get_logs()
+        return f"Logs:\n{result.get('data', '')}"
+
+    return await safe_execute_async(_logs_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_about_info() -> str:
+    """Get version / build / runtime info about this Listmonk instance."""
+    async def _about_logic() -> str:
+        client = get_client()
+        result = await client.get_about_info()
+        return f"About:\n{result.get('data', {})}"
+
+    return await safe_execute_async(_about_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_dashboard_counts() -> str:
+    """Get dashboard counts (subscribers, lists, campaigns, etc)."""
+    async def _counts_logic() -> str:
+        client = get_client()
+        result = await client.get_dashboard_counts()
+        d = result.get("data", {})
+        return f"Dashboard counts:\n{d}"
+
+    return await safe_execute_async(_counts_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def get_dashboard_charts() -> str:
+    """Get dashboard chart data (campaign views, link clicks over time)."""
+    async def _charts_logic() -> str:
+        client = get_client()
+        result = await client.get_dashboard_charts()
+        return f"Dashboard charts:\n{result.get('data', {})}"
+
+    return await safe_execute_async(_charts_logic)  # type: ignore[no-any-return]
+
+
+# Maintenance Tools
+@mcp.tool()
+async def gc_subscribers(gc_type: str) -> str:
+    """
+    Garbage collect subscribers.
+
+    Args:
+        gc_type: One of "blocklisted", "orphan", "unconfirmed".
+    """
+    async def _gc_subs_logic() -> str:
+        client = get_client()
+        await client.gc_subscribers(gc_type)
+        return f"Successfully ran subscriber GC ({gc_type})"
+
+    return await safe_execute_async(_gc_subs_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def gc_campaign_analytics(analytics_type: str) -> str:
+    """
+    Garbage collect campaign analytics.
+
+    Args:
+        analytics_type: One of "views", "clicks", "links", "bounces", "all".
+    """
+    async def _gc_analytics_logic() -> str:
+        client = get_client()
+        await client.gc_campaign_analytics(analytics_type)
+        return f"Successfully ran analytics GC ({analytics_type})"
+
+    return await safe_execute_async(_gc_analytics_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def gc_unconfirmed_subscriptions(before: str) -> str:
+    """
+    Delete unconfirmed double-opt-in subscriptions older than the given timestamp.
+
+    Args:
+        before: ISO timestamp; subscriptions created before this are removed.
+    """
+    async def _gc_unconfirmed_logic() -> str:
+        client = get_client()
+        await client.gc_unconfirmed_subscriptions(before)
+        return f"Successfully GC'd unconfirmed subscriptions before {before}"
+
+    return await safe_execute_async(_gc_unconfirmed_logic)  # type: ignore[no-any-return]
 
 
 @mcp.tool()

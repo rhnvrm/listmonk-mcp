@@ -80,6 +80,65 @@ def get_config() -> Config:
     return _config
 
 
+def _extract_list_page(
+    result: dict[str, Any],
+    requested_page: int,
+    requested_per_page: int
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    """Extract list results and pagination metadata from a Listmonk response."""
+    data = result.get("data", {})
+    if isinstance(data, dict):
+        raw_lists = data.get("results", [])
+        total = data.get("total", len(raw_lists))
+        page = data.get("page", requested_page)
+        per_page = data.get("per_page", requested_per_page)
+    else:
+        raw_lists = data
+        total = len(raw_lists) if isinstance(raw_lists, list) else 0
+        page = requested_page
+        per_page = requested_per_page
+
+    if not isinstance(raw_lists, list):
+        raw_lists = []
+
+    lists = [item for item in raw_lists if isinstance(item, dict)]
+    return lists, int(total), int(page), int(per_page)
+
+
+def _format_list_results(
+    result: dict[str, Any],
+    requested_page: int,
+    requested_per_page: int,
+    query: str | None = None
+) -> str:
+    """Format a paginated list response for an MCP tool."""
+    lists, total, page, per_page = _extract_list_page(
+        result,
+        requested_page=requested_page,
+        requested_per_page=requested_per_page
+    )
+    scope = f" matching '{query}'" if query else ""
+
+    if not lists:
+        return f"No mailing lists found{scope}. Total matching lists: {total}."
+
+    list_items = []
+    for lst in lists:
+        list_items.append(
+            f"- ID: {lst.get('id')} | {lst.get('name')} | "
+            f"UUID: {lst.get('uuid')} | "
+            f"Subscribers: {lst.get('subscriber_count', 0)} | "
+            f"Status: {lst.get('status', 'unknown')} | "
+            f"Type: {lst.get('type', 'unknown')}"
+        )
+
+    return (
+        f"Found {total} mailing lists{scope} "
+        f"(showing {len(lists)} on page {page}, {per_page} per page):\n"
+        + "\n".join(list_items)
+    )
+
+
 # Health Check Tool
 @mcp.tool()
 async def check_listmonk_health() -> str:
@@ -305,34 +364,85 @@ async def list_subscribers() -> str:
 
 # List Management Tools
 @mcp.tool()
-async def get_mailing_lists() -> str:
+async def get_mailing_lists(
+    page: int = 1,
+    per_page: int = 100,
+    query: str | None = None,
+    status: str | None = None
+) -> str:
     """
-    Get all mailing lists.
+    Get a page of mailing lists with optional name search and status filtering.
 
-    Returns a list of all mailing lists with their IDs, UUIDs, names, subscriber counts, and types.
+    This tool defaults to 100 lists per page. The configured Listmonk server
+    controls any maximum; use page to retrieve additional pages, or use query
+    to search list names on the server.
+
+    Args:
+        page: Page number, starting at 1
+        per_page: Number of lists per page, defaulting to 100
+        query: Optional search text matched against list names
+        status: Optional status filter (active or archived)
     """
     async def _get_lists_logic() -> str:
         client = get_client()
-        result = await client.get_lists()
-
-        data = result.get("data", {})
-        lists = data.get("results", []) if isinstance(data, dict) else data
-
-        if not lists:
-            return "No mailing lists found."
-
-        list_items = []
-        for lst in lists:
-            list_items.append(
-                f"- ID: {lst.get('id')} | {lst.get('name')} | "
-                f"UUID: {lst.get('uuid')} | "
-                f"Subscribers: {lst.get('subscriber_count', 0)} | "
-                f"Type: {lst.get('type', 'unknown')}"
-            )
-
-        return f"Found {len(lists)} mailing lists:\n" + "\n".join(list_items)
+        result = await client.get_lists(
+            page=page,
+            per_page=per_page,
+            query=query,
+            status=status
+        )
+        return _format_list_results(
+            result,
+            requested_page=page,
+            requested_per_page=per_page,
+            query=query
+        )
 
     return await safe_execute_async(_get_lists_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def search_mailing_lists(
+    query: str,
+    include_archived: bool = False,
+    page: int = 1,
+    per_page: int = 100
+) -> str:
+    """
+    Search mailing lists by name and return their IDs for targeting campaigns.
+
+    Archived lists are excluded by default because Listmonk hides them from
+    campaign selectors. Set include_archived to true when they are needed.
+
+    Args:
+        query: Text to search for in mailing list names
+        include_archived: Include archived lists in the search results
+        page: Page number, starting at 1
+        per_page: Number of lists per page, defaulting to 100
+    """
+    normalized_query = query.strip()
+    if not normalized_query:
+        return "Error: Search query must not be empty."
+
+    async def _search_lists_logic() -> str:
+        client = get_client()
+        status = None if include_archived else "active"
+        result = await client.get_lists(
+            page=page,
+            per_page=per_page,
+            query=normalized_query,
+            status=status,
+            order_by="name",
+            order="ASC"
+        )
+        return _format_list_results(
+            result,
+            requested_page=page,
+            requested_per_page=per_page,
+            query=normalized_query
+        )
+
+    return await safe_execute_async(_search_lists_logic)  # type: ignore[no-any-return]
 
 
 @mcp.tool()
@@ -549,6 +659,24 @@ async def create_campaign(
     """
     async def _create_campaign_logic() -> str:
         client = get_client()
+
+        if not lists:
+            return "Error: At least one mailing list ID is required."
+        if any(not isinstance(list_id, int) or list_id <= 0 for list_id in lists):
+            return "Error: Mailing list IDs must be positive integers."
+        if len(set(lists)) != len(lists):
+            return "Error: Mailing list IDs must be unique."
+
+        # Resolve each ID before creating anything so a stale or mistyped ID
+        # cannot silently produce a campaign with the wrong audience.
+        list_targets: list[dict[str, Any]] = []
+        for list_id in lists:
+            list_result = await client.get_list(list_id)
+            list_data = list_result.get("data", {})
+            if not isinstance(list_data, dict) or not list_data:
+                return f"Error: Mailing list {list_id} could not be resolved."
+            list_targets.append(list_data)
+
         result = await client.create_campaign(
             name=name,
             subject=subject,
@@ -562,7 +690,14 @@ async def create_campaign(
 
         campaign_data = result.get("data", {})
         campaign_id = campaign_data.get("id", "unknown")
-        return f"Successfully created campaign '{name}' (ID: {campaign_id})"
+        target_summary = ", ".join(
+            f"{target.get('name', 'Unnamed list')} (ID: {list_id})"
+            for list_id, target in zip(lists, list_targets, strict=True)
+        )
+        return (
+            f"Successfully created campaign '{name}' (ID: {campaign_id}). "
+            f"Target lists: {target_summary}"
+        )
 
     return await safe_execute_async(_create_campaign_logic)  # type: ignore[no-any-return]
 
@@ -763,10 +898,12 @@ async def list_mailing_lists() -> str:
     """List all mailing lists with basic information."""
     try:
         client = get_client()
-        result = await client.get_lists()
-
-        data = result.get("data", {})
-        lists = data.get("results", []) if isinstance(data, dict) else data
+        result = await client.get_lists(page=1, per_page=100)
+        lists, total, page, per_page = _extract_list_page(
+            result,
+            requested_page=1,
+            requested_per_page=100
+        )
 
         list_items = []
         for lst in lists:
@@ -783,7 +920,8 @@ async def list_mailing_lists() -> str:
 
         return f"""# Mailing Lists
 
-**Total Lists:** {len(lists)}
+**Total Lists:** {total}
+**Showing:** {len(lists)} (page {page}, {per_page} per page)
 
 {list_items_text}
 

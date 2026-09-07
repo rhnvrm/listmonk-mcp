@@ -6,7 +6,7 @@ An MCP (Model Context Protocol) server for Listmonk, providing programmatic acce
 
 - Complete Listmonk API integration with async operations
 - Subscriber management (CRUD with query/pagination support)
-- List management with tags support
+- List management with tags, pagination, and name search
 - Campaign creation, management, and sending
 - Template management for campaigns and transactional messages
 - Transactional email sending with template data
@@ -49,10 +49,10 @@ All setups use the same basic configuration format:
 
 ## API Coverage
 
-The MCP server exposes 18 endpoints covering all major Listmonk operations:
+The MCP server exposes 30 tools covering all major Listmonk operations:
 
 - **Subscribers**: Get, create, update, delete with advanced filtering
-- **Lists**: Full CRUD operations with tag support
+- **Lists**: Full CRUD operations with tag support, pagination (100 by default), and name search
 - **Campaigns**: Create, manage, and send campaigns
 - **Templates**: Access campaign and transactional templates
 - **Transactional Messages**: Send individual emails with template data

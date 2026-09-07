@@ -212,9 +212,36 @@ class ListmonkClient:
         return await self._request("PUT", f"/api/subscribers/{subscriber_id}", json_data=data)
 
     # List Operations
-    async def get_lists(self) -> dict[str, Any]:
-        """Get all mailing lists."""
-        return await self._request("GET", "/api/lists")
+    async def get_lists(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        query: str | None = None,
+        status: str | None = None,
+        minimal: bool = False,
+        tags: list[str] | None = None,
+        order_by: str | None = None,
+        order: str | None = None
+    ) -> dict[str, Any]:
+        """Get mailing lists with pagination and optional filters."""
+        params: dict[str, Any] = {
+            "page": page,
+            "per_page": per_page,
+        }
+        if query:
+            params["query"] = query
+        if status:
+            params["status"] = status
+        if minimal:
+            params["minimal"] = "true"
+        if tags:
+            params["tag"] = tags
+        if order_by:
+            params["order_by"] = order_by
+        if order:
+            params["order"] = order
+
+        return await self._request("GET", "/api/lists", params=params)
 
     async def get_list(self, list_id: int) -> dict[str, Any]:
         """Get mailing list by ID."""

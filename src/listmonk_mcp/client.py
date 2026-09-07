@@ -215,7 +215,7 @@ class ListmonkClient:
     async def get_lists(
         self,
         page: int = 1,
-        per_page: int = 20,
+        per_page: int = 100,
         query: str | None = None,
         status: str | None = None,
         minimal: bool = False,

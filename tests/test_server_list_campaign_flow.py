@@ -39,6 +39,26 @@ class FakeClient:
 
 
 @pytest.mark.asyncio
+async def test_get_mailing_lists_defaults_to_100_per_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    result = await server.get_mailing_lists()
+
+    assert "Found 588 mailing lists" in result
+    assert fake.list_requests == [
+        {
+            "page": 1,
+            "per_page": 100,
+            "query": None,
+            "status": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_search_mailing_lists_uses_server_side_name_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -52,7 +72,7 @@ async def test_search_mailing_lists_uses_server_side_name_search(
     assert fake.list_requests == [
         {
             "page": 1,
-            "per_page": 50,
+            "per_page": 100,
             "query": "Weekly",
             "status": "active",
             "order_by": "name",

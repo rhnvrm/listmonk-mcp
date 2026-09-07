@@ -52,7 +52,7 @@ All setups use the same basic configuration format:
 The MCP server exposes 30 tools covering all major Listmonk operations:
 
 - **Subscribers**: Get, create, update, delete with advanced filtering
-- **Lists**: Full CRUD operations with tag support, pagination, and name search
+- **Lists**: Full CRUD operations with tag support, pagination (100 by default), and name search
 - **Campaigns**: Create, manage, and send campaigns
 - **Templates**: Access campaign and transactional templates
 - **Transactional Messages**: Send individual emails with template data

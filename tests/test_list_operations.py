@@ -18,7 +18,7 @@ async def test_get_lists_sends_pagination_and_filters() -> None:
                     "results": [{"id": 7, "name": "Weekly News"}],
                     "total": 588,
                     "page": 3,
-                    "per_page": 50,
+                    "per_page": 500,
                 }
             },
         )
@@ -35,7 +35,7 @@ async def test_get_lists_sends_pagination_and_filters() -> None:
         client._client = http_client
         result = await client.get_lists(
             page=3,
-            per_page=50,
+            per_page=500,
             query="Weekly",
             status="active",
             minimal=True,
@@ -48,7 +48,7 @@ async def test_get_lists_sends_pagination_and_filters() -> None:
     assert len(requests) == 1
     params = requests[0].url.params
     assert params["page"] == "3"
-    assert params["per_page"] == "50"
+    assert params["per_page"] == "500"
     assert params["query"] == "Weekly"
     assert params["status"] == "active"
     assert params["minimal"] == "true"
@@ -59,7 +59,10 @@ async def test_get_lists_sends_pagination_and_filters() -> None:
 
 @pytest.mark.asyncio
 async def test_get_lists_supports_a_response_with_no_results() -> None:
+    requests: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         return httpx.Response(
             200,
             json={
@@ -67,7 +70,7 @@ async def test_get_lists_supports_a_response_with_no_results() -> None:
                     "results": [],
                     "total": 0,
                     "page": 1,
-                    "per_page": 50,
+                    "per_page": 100,
                 }
             },
         )
@@ -82,6 +85,7 @@ async def test_get_lists_supports_a_response_with_no_results() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client._client = http_client
-        result = await client.get_lists(page=1, per_page=50, query="missing")
+        result = await client.get_lists(page=1, query="missing")
 
     assert result["data"]["total"] == 0
+    assert requests[0].url.params["per_page"] == "100"

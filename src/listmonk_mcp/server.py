@@ -366,19 +366,20 @@ async def list_subscribers() -> str:
 @mcp.tool()
 async def get_mailing_lists(
     page: int = 1,
-    per_page: int = 50,
+    per_page: int = 100,
     query: str | None = None,
     status: str | None = None
 ) -> str:
     """
     Get a page of mailing lists with optional name search and status filtering.
 
-    Listmonk returns up to 50 lists per page. Use page to retrieve additional
-    pages, or use query to search list names on the server.
+    This tool defaults to 100 lists per page. The configured Listmonk server
+    controls any maximum; use page to retrieve additional pages, or use query
+    to search list names on the server.
 
     Args:
         page: Page number, starting at 1
-        per_page: Number of lists per page, up to 50
+        per_page: Number of lists per page, defaulting to 100
         query: Optional search text matched against list names
         status: Optional status filter (active or archived)
     """
@@ -405,7 +406,7 @@ async def search_mailing_lists(
     query: str,
     include_archived: bool = False,
     page: int = 1,
-    per_page: int = 50
+    per_page: int = 100
 ) -> str:
     """
     Search mailing lists by name and return their IDs for targeting campaigns.
@@ -417,7 +418,7 @@ async def search_mailing_lists(
         query: Text to search for in mailing list names
         include_archived: Include archived lists in the search results
         page: Page number, starting at 1
-        per_page: Number of lists per page, up to 50
+        per_page: Number of lists per page, defaulting to 100
     """
     normalized_query = query.strip()
     if not normalized_query:
@@ -897,11 +898,11 @@ async def list_mailing_lists() -> str:
     """List all mailing lists with basic information."""
     try:
         client = get_client()
-        result = await client.get_lists(page=1, per_page=50)
+        result = await client.get_lists(page=1, per_page=100)
         lists, total, page, per_page = _extract_list_page(
             result,
             requested_page=1,
-            requested_per_page=50
+            requested_per_page=100
         )
 
         list_items = []

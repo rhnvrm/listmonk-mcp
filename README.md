@@ -195,6 +195,7 @@ The campaign tool verifies every target list with Listmonk before creating the
 campaign. Creating a campaign does not send it; `send_campaign` is a separate,
 explicit operation.
 
-`get_mailing_lists` supports `page`, `per_page` (up to 50), `query`, and
-`status`. The response reports the API's total separately from the number of
-lists returned on the current page.
+`get_mailing_lists` supports `page`, `per_page` (default 100), `query`, and
+`status`. The configured Listmonk server controls any maximum. The response
+reports the API's total separately from the number of lists returned on the
+current page.

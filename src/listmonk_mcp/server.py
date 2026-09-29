@@ -966,7 +966,8 @@ async def update_template(
     template_id: int,
     name: str | None = None,
     body: str | None = None,
-    is_default: bool | None = None
+    is_default: bool | None = None,
+    subject: str | None = None
 ) -> str:
     """
     Update an existing email template.
@@ -976,6 +977,7 @@ async def update_template(
         name: New template name
         body: New template HTML body content
         is_default: Whether this is the default template
+        subject: Email subject line (required for transactional templates, carried forward from existing template if omitted)
     """
     async def _update_template_logic() -> str:
         client = get_client()
@@ -983,7 +985,8 @@ async def update_template(
             template_id=template_id,
             name=name,
             body=body,
-            is_default=is_default
+            is_default=is_default,
+            subject=subject
         )
 
         return f"Successfully updated template {template_id}"

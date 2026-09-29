@@ -394,7 +394,8 @@ class ListmonkClient:
         template_id: int,
         name: str | None = None,
         body: str | None = None,
-        is_default: bool | None = None
+        is_default: bool | None = None,
+        subject: str | None = None
     ) -> dict[str, Any]:
         """Update an existing template.
 
@@ -413,6 +414,13 @@ class ListmonkClient:
             "body": body if body is not None else template_data.get("body", ""),
             "is_default": is_default if is_default is not None else template_data.get("is_default", False),
         }
+
+        # Transactional templates require a subject field in PUT requests
+        current_subject = template_data.get("subject", "")
+        if subject is not None:
+            data["subject"] = subject
+        elif current_subject:
+            data["subject"] = current_subject
 
         return await self._request("PUT", f"/api/templates/{template_id}", json_data=data)
 

@@ -19,7 +19,7 @@ jobs:
       matrix:
         python: ['3.11', '3.12', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -35,7 +35,7 @@ jobs:
         run: |
           uv run --frozen listmonk-mcp --help
           uv run --frozen listmonk-mcp --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: tests-python-${{ matrix.python }}
@@ -73,7 +73,7 @@ jobs:
       LISTMONK_app__address: 127.0.0.1:19000
       LISTMONK_VERSION: ${{ matrix.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.13'
@@ -102,7 +102,7 @@ jobs:
           cat server.log
           exit 1
       - run: uv run --frozen pytest tests/test_live_listmonk.py --junitxml=integration-results.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: listmonk-${{ matrix.version }}

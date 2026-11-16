@@ -25,11 +25,12 @@ This server will bridge the MCP protocol with Listmonk's REST API, providing a s
 ## Features
 
 - **Complete Listmonk API Coverage**: All major Listmonk operations supported
-- **18 MCP Tools**: Comprehensive subscriber, list, campaign, and template management
+- **30 MCP Tools**: Comprehensive subscriber, list, campaign, and template management
 - **MCP Resources**: Easy access to subscriber, list, campaign, and template data
 - **Async Operations**: Built with modern async/await patterns
 - **Type Safety**: Full Pydantic model validation
 - **Environment Configuration**: Easy setup with environment variables
+- **Paginated list discovery**: Search mailing lists by name and retrieve every page
 
 ## Installation
 
@@ -181,3 +182,20 @@ listmonk-mcp
 - **Connection refused**: Listmonk server not running or wrong URL
 - **Module not found**: Install dependencies with `uv install` or `pip install -e .`
 
+## Campaign Targeting
+
+Campaign creation requires numeric Listmonk list IDs. Use the list search tool
+first to resolve a human-readable name to the correct ID:
+
+1. Call `search_mailing_lists` with part of the list name.
+2. Confirm the returned list name, ID, status, and subscriber count.
+3. Pass the confirmed ID or IDs to `create_campaign`.
+
+The campaign tool verifies every target list with Listmonk before creating the
+campaign. Creating a campaign does not send it; `send_campaign` is a separate,
+explicit operation.
+
+`get_mailing_lists` supports `page`, `per_page` (default 100), `query`, and
+`status`. The configured Listmonk server controls any maximum. The response
+reports the API's total separately from the number of lists returned on the
+current page.

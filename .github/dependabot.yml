@@ -14,3 +14,8 @@ updates:
     groups:
       python-dependencies:
         patterns: ['*']
+    ignore:
+      - dependency-name: mcp
+        versions: ['>=2']
+      - dependency-name: mypy
+        update-types: ['version-update:semver-major']

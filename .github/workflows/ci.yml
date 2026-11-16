@@ -35,7 +35,7 @@ jobs:
         run: |
           uv run --frozen listmonk-mcp --help
           uv run --frozen listmonk-mcp --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: tests-python-${{ matrix.python }}
@@ -102,7 +102,7 @@ jobs:
           cat server.log
           exit 1
       - run: uv run --frozen pytest tests/test_live_listmonk.py --junitxml=integration-results.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: listmonk-${{ matrix.version }}

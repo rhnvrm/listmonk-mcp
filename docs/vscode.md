@@ -1,44 +1,25 @@
-# VS Code Setup
+# VS Code
 
-Add the Listmonk MCP server to your VS Code settings.
-
-## Configuration
-
-Add to your `~/.config/Code/User/settings.json`:
+Create `.vscode/mcp.json` in your workspace (or use **MCP: Add Server** for user-level configuration). VS Code uses a top-level `servers` object rather than Claude Desktop's `mcpServers` format.
 
 ```json
 {
-  "mcp": {
-    "servers": {
-      "listmonk": {
-        "command": "uvx",
-        "args": ["listmonk-mcp"],
-        "env": {
-          "LISTMONK_MCP_URL": "http://localhost:9000",
-          "LISTMONK_MCP_USERNAME": "your-api-username",
-          "LISTMONK_MCP_PASSWORD": "your-api-token"
-        }
+  "inputs": [
+    {"type": "promptString", "id": "listmonk-token", "description": "Listmonk API token", "password": true}
+  ],
+  "servers": {
+    "listmonk": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["listmonk-mcp@0.2.0"],
+      "env": {
+        "LISTMONK_MCP_URL": "https://listmonk.example.com",
+        "LISTMONK_MCP_USERNAME": "your-api-user",
+        "LISTMONK_MCP_PASSWORD": "${input:listmonk-token}"
       }
     }
   }
 }
 ```
 
-## Environment Variables
-
-- `LISTMONK_MCP_URL`: Your Listmonk server URL
-- `LISTMONK_MCP_USERNAME`: API user created in Admin → Users
-- `LISTMONK_MCP_PASSWORD`: API token (not user password)
-
-## Prerequisites
-
-1. **Install uvx** (if not already installed):
-   ```bash
-   pip install uv
-   ```
-
-2. **Create API user and token** in Listmonk admin interface:
-   - Go to Admin → Users in your Listmonk instance
-   - Create a new API user and token
-
-3. **Restart VS Code** after adding configuration
+Install uv first. Start the server from the configuration editor or the MCP commands in the Command Palette. See [[configuration|configuration]] for required permissions and connection troubleshooting.

@@ -65,3 +65,9 @@ result-*
 
 # LLM
 .claude
+# Local credentials and generated documentation
+.env
+_site/
+site/
+coverage.xml
+.ruff_cache/

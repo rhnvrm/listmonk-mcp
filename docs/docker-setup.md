@@ -1,51 +1,26 @@
-# Docker Setup
+# Local Listmonk with Docker
 
-If you need to set up Listmonk using Docker, you can use the included Docker Compose configuration.
+The example Compose file runs a disposable Listmonk and PostgreSQL installation. It is intended for development; choose production credentials and deployment settings separately.
 
-## Quick Docker Setup
+```sh
+LISTMONK_ADMIN_USER=admin LISTMONK_ADMIN_PASSWORD=change-this-local-password \
+  docker compose -f docs/listmonk-docker-compose.yml up -d
+```
 
-1. **Use the provided Docker Compose file:**
-   ```bash
-   # Copy the compose file to your desired location
-   cp docs/listmonk-docker-compose.yml docker-compose.yml
-   ```
+Visit `http://localhost:9000`, sign in with the credentials you supplied, and create an API user/token for the MCP. There is no assumed default dashboard password.
 
-2. **Start Listmonk:**
-   ```bash
-   docker-compose up -d
-   ```
+To exercise v7 beta.2 explicitly:
 
-3. **Access Listmonk:**
-   - Open http://localhost:9000
-   - Follow the setup wizard
-   - Create an admin user
-   - Go to Settings → Users to create API credentials
+```sh
+LISTMONK_IMAGE=listmonk/listmonk:v7.0.0-beta.2 \
+LISTMONK_ADMIN_USER=admin LISTMONK_ADMIN_PASSWORD=change-this-local-password \
+  docker compose -f docs/listmonk-docker-compose.yml up -d
+```
 
-## Docker Compose Configuration
+The example binds Listmonk to localhost. PostgreSQL is kept on the Compose network. Database installation is idempotent; the startup command applies Listmonk upgrades. Back up an existing database before upgrading.
 
-The provided configuration includes:
+```sh
+docker compose -f docs/listmonk-docker-compose.yml down
+```
 
-- **Listmonk**: Newsletter management application
-- **PostgreSQL**: Database backend
-- **Persistent volumes**: For data retention
-- **Environment variables**: Pre-configured for development
-
-## API Setup
-
-After Listmonk is running:
-
-1. Access the admin panel at http://localhost:9000
-2. Go to Settings → Users
-3. Create a new API user with appropriate permissions
-4. Generate an API token
-5. Use these credentials in your MCP configuration
-
-## Production Considerations
-
-For production deployment:
-
-- Change default passwords
-- Use proper SSL certificates  
-- Configure proper backup strategies
-- Review security settings
-- Use environment-specific configuration files
+This stops the services and retains the database volume. To start completely fresh, remove the named volume deliberately.

@@ -1,65 +1,22 @@
-name: Deploy Docs
+name: Docs
 
 on:
   push:
-    branches: [ master ]
-    paths:
-      - 'docs/**'
-      - 'README.md'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
+    branches: [master]
+    paths: ['docs/**', '.github/workflows/docs.yml']
   pull_request:
-    branches: [ master ]
-    paths:
-      - 'docs/**'
-      - 'README.md'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
+    branches: [master]
+    paths: ['docs/**', '.github/workflows/docs.yml']
+  workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --extra docs
-
-      - name: Build docs
-        run: uv run mkdocs build
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./site
-
-  deploy:
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+  docs:
+    uses: oddship/moat/.github/workflows/build-docs.yml@7f024a399bd850e8650af1ab38fb62d1d13d1e93
+    with:
+      docs_dir: docs
+      moat_version: v0.7.0

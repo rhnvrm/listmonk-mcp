@@ -3,6 +3,7 @@
 from typing import Any
 
 import httpx
+from mcp.server.fastmcp.exceptions import ToolError
 
 # Import ListmonkAPIError from client module
 from .client import ListmonkAPIError
@@ -15,7 +16,7 @@ class ListmonkMCPError(Exception):
         self,
         message: str,
         details: dict[str, Any] | None = None,
-        cause: Exception | None = None
+        cause: Exception | None = None,
     ):
         super().__init__(message)
         self.message = message
@@ -49,7 +50,7 @@ class ValidationError(ListmonkMCPError):
         message: str,
         field: str | None = None,
         value: Any | None = None,
-        details: dict[str, Any] | None = None
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message, details)
         self.field = field
@@ -72,7 +73,7 @@ class AuthenticationError(ListmonkMCPError):
         self,
         message: str = "Authentication failed",
         status_code: int | None = None,
-        details: dict[str, Any] | None = None
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message, details)
         self.status_code = status_code
@@ -93,7 +94,7 @@ class APIError(ListmonkMCPError):
         message: str,
         status_code: int | None = None,
         response_data: dict[str, Any] | None = None,
-        endpoint: str | None = None
+        endpoint: str | None = None,
     ):
         super().__init__(message, response_data)
         self.status_code = status_code
@@ -119,7 +120,7 @@ class ConfigurationError(ListmonkMCPError):
         self,
         message: str,
         config_key: str | None = None,
-        details: dict[str, Any] | None = None
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message, details)
         self.config_key = config_key
@@ -140,7 +141,7 @@ class OperationError(ListmonkMCPError):
         message: str,
         operation: str | None = None,
         resource_id: str | int | None = None,
-        details: dict[str, Any] | None = None
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message, details)
         self.operation = operation
@@ -163,7 +164,7 @@ class ResourceNotFoundError(OperationError):
         self,
         resource_type: str,
         resource_id: str | int,
-        details: dict[str, Any] | None = None
+        details: dict[str, Any] | None = None,
     ):
         message = f"{resource_type} with ID '{resource_id}' not found"
         super().__init__(message, "get", resource_id, details)
@@ -180,10 +181,7 @@ class DuplicateResourceError(OperationError):
     """Raised when attempting to create a resource that already exists."""
 
     def __init__(
-        self,
-        resource_type: str,
-        identifier: str,
-        details: dict[str, Any] | None = None
+        self, resource_type: str, identifier: str, details: dict[str, Any] | None = None
     ):
         message = f"{resource_type} with identifier '{identifier}' already exists"
         super().__init__(message, "create", identifier, details)
@@ -200,11 +198,12 @@ class DuplicateResourceError(OperationError):
 
 # HTTP Status Code Mapping Utilities
 
+
 def map_http_status_to_exception(
     status_code: int,
     message: str,
     response_data: dict[str, Any] | None = None,
-    endpoint: str | None = None
+    endpoint: str | None = None,
 ) -> ListmonkMCPError:
     """Map HTTP status codes to appropriate exception types."""
 
@@ -212,13 +211,13 @@ def map_http_status_to_exception(
         return AuthenticationError(
             message=message or "Unauthorized access",
             status_code=status_code,
-            details=response_data
+            details=response_data,
         )
     elif status_code == 403:
         return AuthenticationError(
             message=message or "Access forbidden",
             status_code=status_code,
-            details=response_data
+            details=response_data,
         )
     elif status_code == 404:
         # Try to determine resource type from endpoint
@@ -234,68 +233,64 @@ def map_http_status_to_exception(
                 resource_type = "Template"
 
         return ResourceNotFoundError(
-            resource_type=resource_type,
-            resource_id="unknown",
-            details=response_data
+            resource_type=resource_type, resource_id="unknown", details=response_data
         )
     elif status_code == 409:
         return DuplicateResourceError(
-            resource_type="Resource",
-            identifier="unknown",
-            details=response_data
+            resource_type="Resource", identifier="unknown", details=response_data
         )
     elif status_code == 422:
         return ValidationError(
-            message=message or "Validation failed",
-            details=response_data
+            message=message or "Validation failed", details=response_data
         )
     elif 400 <= status_code < 500:
         return ValidationError(
-            message=message or f"Client error: {status_code}",
-            details=response_data
+            message=message or f"Client error: {status_code}", details=response_data
         )
     elif 500 <= status_code < 600:
         return APIError(
             message=message or f"Server error: {status_code}",
             status_code=status_code,
             response_data=response_data,
-            endpoint=endpoint
+            endpoint=endpoint,
         )
     else:
         return APIError(
             message=message or f"HTTP error: {status_code}",
             status_code=status_code,
             response_data=response_data,
-            endpoint=endpoint
+            endpoint=endpoint,
         )
 
 
-def handle_httpx_error(error: httpx.RequestError, endpoint: str | None = None) -> ListmonkMCPError:
+def handle_httpx_error(
+    error: httpx.RequestError, endpoint: str | None = None
+) -> ListmonkMCPError:
     """Convert httpx errors to appropriate MCP exceptions."""
 
     if isinstance(error, httpx.ConnectError):
         return ConfigurationError(
             message="Unable to connect to Listmonk server",
-            details={"original_error": str(error), "endpoint": endpoint}
+            details={"original_error": str(error), "endpoint": endpoint},
         )
     elif isinstance(error, httpx.TimeoutException):
         return OperationError(
             message="Request timed out",
             operation="request",
-            details={"original_error": str(error), "endpoint": endpoint}
+            details={"original_error": str(error), "endpoint": endpoint},
         )
     elif isinstance(error, httpx.HTTPStatusError):
         return map_http_status_to_exception(
             status_code=error.response.status_code,
             message=str(error),
             response_data=getattr(error.response, "json", lambda: {})(),
-            endpoint=endpoint
+            endpoint=endpoint,
         )
     else:
         return APIError(
             message=f"HTTP request failed: {str(error)}",
             endpoint=endpoint,
-            response_data={"original_error": str(error)}
+            response_data={"original_error": str(error)},
         )
 
 
@@ -303,28 +298,23 @@ def convert_listmonk_api_error(error: Exception) -> ListmonkMCPError:
     """Convert existing ListmonkAPIError to new exception hierarchy."""
 
     # Handle the existing ListmonkAPIError from client.py
-    if hasattr(error, 'status_code') and hasattr(error, 'response'):
+    if hasattr(error, "status_code") and hasattr(error, "response"):
         return map_http_status_to_exception(
             status_code=error.status_code,
             message=str(error),
-            response_data=error.response if hasattr(error, 'response') else None
+            response_data=error.response if hasattr(error, "response") else None,
         )
 
     # Handle general exceptions
-    return APIError(
-        message=str(error),
-        response_data={"original_error": str(error)}
-    )
+    return APIError(message=str(error), response_data={"original_error": str(error)})
 
 
 # MCP Error Response Formatting
 
+
 def format_mcp_error(error: ListmonkMCPError) -> dict[str, Any]:
     """Format an exception for MCP error response."""
-    return {
-        "error": error.to_dict(),
-        "success": False
-    }
+    return {"error": error.to_dict(), "success": False}
 
 
 def safe_execute(func: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -336,7 +326,7 @@ def safe_execute(func: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
     """
     try:
         result = func(*args, **kwargs)
-        if hasattr(result, '__await__'):  # Handle async functions
+        if hasattr(result, "__await__"):  # Handle async functions
             raise ValueError("Use safe_execute_async for async functions")
         return {"success": True, "data": result}
     except ListmonkMCPError as e:
@@ -356,8 +346,15 @@ async def safe_execute_async(func: Any, *args: Any, **kwargs: Any) -> Any:
         return result
     except ListmonkAPIError as e:
         error_details = convert_listmonk_api_error(e).to_dict()
-        return f"Error: {error_details['error_type']} - {error_details['message']}"
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        return f"Unexpected error: {str(e)}\n\nTraceback:\n{tb}"
+        raise ToolError(
+            f"{error_details['error_type']}: {error_details['message']}"
+        ) from e
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("Tool execution failed")
+        raise ToolError(
+            "Tool execution failed. Check the server logs for details."
+        ) from None

@@ -13,7 +13,7 @@ Add the Listmonk MCP server to Cline extension in VS Code.
   "mcpServers": {
     "listmonk": {
       "command": "uvx",
-      "args": ["listmonk-mcp"],
+      "args": ["listmonk-mcp@0.2.0"],
       "env": {
         "LISTMONK_MCP_URL": "http://localhost:9000",
         "LISTMONK_MCP_USERNAME": "your-api-username",
@@ -42,3 +42,5 @@ Add the Listmonk MCP server to Cline extension in VS Code.
    - Create a new API user and token
 
 3. **Restart VS Code** after adding configuration
+
+See [[configuration|configuration]] for permissions, environment files, and troubleshooting.

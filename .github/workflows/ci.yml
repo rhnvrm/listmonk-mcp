@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen ruff check src tests scripts
+      - run: uv run --frozen ruff format --check src tests scripts
+      - run: uv run --frozen mypy src
+      - run: uv run --frozen pytest --junitxml=test-results.xml
+      - run: uv build
+      - run: uv run --frozen twine check dist/*
+      - name: Check CLI without credentials
+        run: |
+          uv run --frozen listmonk-mcp --help
+          uv run --frozen listmonk-mcp --version
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-python-${{ matrix.python }}
+          path: test-results.xml
+
+  listmonk:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['6.0.0', '7.0.0-beta.2']
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: listmonk
+          POSTGRES_PASSWORD: test-db-password
+          POSTGRES_DB: listmonk
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U listmonk'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      LISTMONK_TEST_URL: http://127.0.0.1:19000
+      LISTMONK_TEST_ADMIN_USER: test-admin
+      LISTMONK_TEST_ADMIN_PASSWORD: test-password
+      LISTMONK_ADMIN_USER: test-admin
+      LISTMONK_ADMIN_PASSWORD: test-password
+      LISTMONK_db__host: 127.0.0.1
+      LISTMONK_db__port: '5432'
+      LISTMONK_db__user: listmonk
+      LISTMONK_db__password: test-db-password
+      LISTMONK_db__database: listmonk
+      LISTMONK_db__ssl_mode: disable
+      LISTMONK_app__address: 127.0.0.1:19000
+      LISTMONK_VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.13'
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - name: Download official Listmonk release
+        run: |
+          mkdir -p /tmp/listmonk-ci
+          cd /tmp/listmonk-ci
+          base="https://github.com/knadh/listmonk/releases/download/v${LISTMONK_VERSION}"
+          archive="listmonk_${LISTMONK_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "${base}/${archive}"
+          curl -fsSLO "${base}/listmonk_${LISTMONK_VERSION}_checksums.txt"
+          grep " ${archive}$" "listmonk_${LISTMONK_VERSION}_checksums.txt" | sha256sum --check
+          tar xzf "$archive"
+      - name: Start disposable Listmonk
+        run: |
+          cd /tmp/listmonk-ci
+          mkdir -p uploads
+          ./listmonk --config '' --install --yes
+          ./listmonk --config '' > server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:19000/health; then exit 0; fi
+            sleep 1
+          done
+          cat server.log
+          exit 1
+      - run: uv run --frozen pytest tests/test_live_listmonk.py --junitxml=integration-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: listmonk-${{ matrix.version }}
+          path: |
+            integration-results.xml
+            /tmp/listmonk-ci/server.log

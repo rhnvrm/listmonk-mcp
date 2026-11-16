@@ -11,7 +11,7 @@ Add to your Windsurf MCP settings:
   "mcpServers": {
     "listmonk": {
       "command": "uvx",
-      "args": ["listmonk-mcp"],
+      "args": ["listmonk-mcp@0.2.0"],
       "env": {
         "LISTMONK_MCP_URL": "http://localhost:9000",
         "LISTMONK_MCP_USERNAME": "your-api-username",
@@ -31,7 +31,7 @@ Add to your Cursor MCP settings:
   "mcpServers": {
     "listmonk": {
       "command": "uvx",
-      "args": ["listmonk-mcp"],
+      "args": ["listmonk-mcp@0.2.0"],
       "env": {
         "LISTMONK_MCP_URL": "http://localhost:9000",
         "LISTMONK_MCP_USERNAME": "your-api-username",
@@ -60,3 +60,5 @@ Add to your Cursor MCP settings:
    - Create a new API user and token
 
 3. **Restart your IDE** after adding configuration
+
+See [[configuration|configuration]] for permissions, environment files, and troubleshooting.

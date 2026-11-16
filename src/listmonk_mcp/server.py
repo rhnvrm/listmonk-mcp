@@ -1,11 +1,12 @@
 """Listmonk MCP Server using FastMCP framework."""
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
 import typer
-from mcp.server import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from .client import ListmonkAPIError, ListmonkClient, create_client
 from .config import Config, load_config, validate_config
@@ -27,7 +28,7 @@ async def lifespan(app: Any) -> Any:
 
     try:
         # Load and validate configuration
-        _config = load_config()
+        _config = _config or load_config()
         validate_config()
 
         logger.info(f"Connecting to Listmonk at {_config.url}")
@@ -46,24 +47,17 @@ async def lifespan(app: Any) -> Any:
         if _client:
             await _client.close()
             logger.info("Listmonk client disconnected")
+        _client = None
+        _config = None
 
 
-# Create a basic MCP server just for decorator registration (no lifespan)
-mcp = FastMCP("Listmonk MCP Server")
+# Register tools and resources on the same server that owns their lifespan.
+mcp = FastMCP("Listmonk MCP Server", lifespan=lifespan)
 
 
 def create_production_server() -> FastMCP:
-    """Create the production MCP server with lifespan management."""
-    # Create a new server with the same tools but with lifespan
-    production_server = FastMCP("Listmonk MCP Server", lifespan=lifespan)
-
-    # Copy all registered tools from the decorator server to production server
-    # Access the tool manager to copy tools properly
-    if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, '_tools'):
-        for tool_name, tool_func in mcp._tool_manager._tools.items():
-            production_server._tool_manager._tools[tool_name] = tool_func
-
-    return production_server
+    """Return the server with all public registrations and lifecycle hooks."""
+    return mcp
 
 
 def get_client() -> ListmonkClient:
@@ -81,9 +75,7 @@ def get_config() -> Config:
 
 
 def _extract_list_page(
-    result: dict[str, Any],
-    requested_page: int,
-    requested_per_page: int
+    result: dict[str, Any], requested_page: int, requested_per_page: int
 ) -> tuple[list[dict[str, Any]], int, int, int]:
     """Extract list results and pagination metadata from a Listmonk response."""
     data = result.get("data", {})
@@ -109,13 +101,11 @@ def _format_list_results(
     result: dict[str, Any],
     requested_page: int,
     requested_per_page: int,
-    query: str | None = None
+    query: str | None = None,
 ) -> str:
     """Format a paginated list response for an MCP tool."""
     lists, total, page, per_page = _extract_list_page(
-        result,
-        requested_page=requested_page,
-        requested_per_page=requested_per_page
+        result, requested_page=requested_page, requested_per_page=requested_per_page
     )
     scope = f" matching '{query}'" if query else ""
 
@@ -143,6 +133,7 @@ def _format_list_results(
 @mcp.tool()
 async def check_listmonk_health() -> str:
     """Check if Listmonk server is healthy and accessible."""
+
     async def _check_health_logic() -> str:
         client = get_client()
         health_data = await client.health_check()
@@ -161,7 +152,7 @@ async def add_subscriber(
     lists: list[int],
     status: str = "enabled",
     attributes: dict[str, Any] | None = None,
-    preconfirm: bool = False
+    preconfirm: bool = False,
 ) -> str:
     """
     Add a new subscriber to Listmonk.
@@ -174,6 +165,7 @@ async def add_subscriber(
         attributes: Custom subscriber attributes
         preconfirm: Whether to preconfirm subscriptions
     """
+
     async def _add_subscriber_logic() -> str:
         client = get_client()
         result = await client.create_subscriber(
@@ -182,7 +174,7 @@ async def add_subscriber(
             status=status,
             lists=lists,
             attribs=attributes or {},
-            preconfirm_subscriptions=preconfirm
+            preconfirm_subscriptions=preconfirm,
         )
 
         subscriber_data = result.get("data", {})
@@ -199,7 +191,7 @@ async def update_subscriber(
     name: str | None = None,
     status: str | None = None,
     lists: list[int] | None = None,
-    attributes: dict[str, Any] | None = None
+    attributes: dict[str, Any] | None = None,
 ) -> str:
     """
     Update an existing subscriber.
@@ -212,6 +204,7 @@ async def update_subscriber(
         lists: New list of mailing list IDs
         attributes: New custom attributes
     """
+
     async def _update_subscriber_logic() -> str:
         client = get_client()
         await client.update_subscriber(
@@ -220,7 +213,7 @@ async def update_subscriber(
             name=name,
             status=status,
             lists=lists,
-            attribs=attributes
+            attribs=attributes,
         )
 
         return f"Successfully updated subscriber {subscriber_id}"
@@ -236,6 +229,7 @@ async def remove_subscriber(subscriber_id: int) -> str:
     Args:
         subscriber_id: ID of the subscriber to remove
     """
+
     async def _remove_subscriber_logic() -> str:
         client = get_client()
         await client.delete_subscriber(subscriber_id)
@@ -254,6 +248,7 @@ async def change_subscriber_status(subscriber_id: int, status: str) -> str:
         subscriber_id: ID of the subscriber
         status: New status (enabled, disabled, blocklisted)
     """
+
     async def _change_status_logic() -> str:
         client = get_client()
         await client.set_subscriber_status(subscriber_id, status)
@@ -266,23 +261,29 @@ async def change_subscriber_status(subscriber_id: int, status: str) -> str:
 @mcp.tool()
 async def patch_subscriber(
     subscriber_id: int,
-    action: str,
-    target_list_ids: list[int] | None = None,
+    email: str | None = None,
+    name: str | None = None,
     status: str | None = None,
+    lists: list[int] | None = None,
+    attributes: dict[str, Any] | None = None,
+    preconfirm: bool = False,
 ) -> str:
-    """
-    Patch a subscriber's lists or status (more surgical than update_subscriber).
+    """Partially update a subscriber. Omitted fields and list memberships are preserved.
 
-    Args:
-        subscriber_id: ID of the subscriber to patch.
-        action: One of "add", "remove", "unsubscribe" (lists) or "blocklist" / "enable" (status).
-        target_list_ids: List IDs (for list-related actions).
-        status: New status (for status-related actions).
+    Supplying lists replaces memberships; [] removes all memberships.
     """
+
     async def _patch_logic() -> str:
-        client = get_client()
-        await client.patch_subscriber(subscriber_id, action, target_list_ids, status)
-        return f"Successfully patched subscriber {subscriber_id} (action={action})"
+        await get_client().patch_subscriber(
+            subscriber_id,
+            email=email,
+            name=name,
+            status=status,
+            lists=lists,
+            attribs=attributes,
+            preconfirm_subscriptions=preconfirm,
+        )
+        return f"Successfully patched subscriber {subscriber_id}"
 
     return await safe_execute_async(_patch_logic)  # type: ignore[no-any-return]
 
@@ -295,6 +296,7 @@ async def subscriber_send_optin(subscriber_id: int) -> str:
     Args:
         subscriber_id: ID of the subscriber.
     """
+
     async def _optin_logic() -> str:
         client = get_client()
         await client.subscriber_send_optin(subscriber_id)
@@ -311,6 +313,7 @@ async def blocklist_subscriber(subscriber_id: int) -> str:
     Args:
         subscriber_id: ID of the subscriber to blocklist.
     """
+
     async def _blocklist_logic() -> str:
         client = get_client()
         await client.blocklist_subscriber(subscriber_id)
@@ -327,6 +330,7 @@ async def blocklist_subscribers(subscriber_ids: list[int]) -> str:
     Args:
         subscriber_ids: List of subscriber IDs to blocklist.
     """
+
     async def _blocklist_many_logic() -> str:
         client = get_client()
         await client.blocklist_subscribers(subscriber_ids)
@@ -351,9 +355,12 @@ async def manage_subscriber_lists(
         action: One of "add", "remove", "unsubscribe".
         status: Optional subscription status (e.g. "confirmed", "unconfirmed").
     """
+
     async def _manage_lists_logic() -> str:
         client = get_client()
-        await client.manage_subscriber_lists(subscriber_ids, target_list_ids, action, status)
+        await client.manage_subscriber_lists(
+            subscriber_ids, target_list_ids, action, status
+        )
         return (
             f"Successfully {action}ed {len(subscriber_ids)} subscriber(s) "
             f"on {len(target_list_ids)} list(s)"
@@ -370,23 +377,19 @@ async def get_subscriber_activity(subscriber_id: int) -> str:
     Args:
         subscriber_id: ID of the subscriber.
     """
+
     async def _activity_logic() -> str:
         client = get_client()
         result = await client.get_subscriber_activity(subscriber_id)
-        events = result.get("data", [])
-        if not events:
-            return f"No activity recorded for subscriber {subscriber_id}"
-        rows = [
-            f"- {e.get('created_at', '?')} | {e.get('type', '?')} | {e.get('list_name') or e.get('subject') or ''}"
-            for e in events
-        ]
-        return f"Activity for subscriber {subscriber_id} ({len(events)} events):\n" + "\n".join(rows)
+        return json.dumps(result.get("data", {}), ensure_ascii=False)
 
     return await safe_execute_async(_activity_logic)  # type: ignore[no-any-return]
 
 
 @mcp.tool()
-async def delete_subscribers_by_query(query: str, list_ids: list[int] | None = None) -> str:
+async def delete_subscribers_by_query(
+    query: str, list_ids: list[int] | None = None
+) -> str:
     """
     Delete subscribers matching an advanced SQL query expression.
 
@@ -394,6 +397,7 @@ async def delete_subscribers_by_query(query: str, list_ids: list[int] | None = N
         query: Listmonk-style SQL query, e.g. "subscribers.status='disabled'".
         list_ids: Optional restriction to specific list IDs.
     """
+
     async def _del_query_logic() -> str:
         client = get_client()
         await client.delete_subscribers_by_query(query, list_ids)
@@ -403,7 +407,9 @@ async def delete_subscribers_by_query(query: str, list_ids: list[int] | None = N
 
 
 @mcp.tool()
-async def blocklist_subscribers_by_query(query: str, list_ids: list[int] | None = None) -> str:
+async def blocklist_subscribers_by_query(
+    query: str, list_ids: list[int] | None = None
+) -> str:
     """
     Blocklist subscribers matching an advanced SQL query expression.
 
@@ -411,6 +417,7 @@ async def blocklist_subscribers_by_query(query: str, list_ids: list[int] | None 
         query: Listmonk-style SQL query.
         list_ids: Optional restriction to specific list IDs.
     """
+
     async def _bl_query_logic() -> str:
         client = get_client()
         await client.blocklist_subscribers_by_query(query, list_ids)
@@ -437,9 +444,12 @@ async def manage_subscriber_lists_by_query(
         list_ids: Optional restriction to specific source list IDs.
         status: Optional subscription status.
     """
+
     async def _ml_query_logic() -> str:
         client = get_client()
-        await client.manage_subscriber_lists_by_query(query, target_list_ids, action, list_ids, status)
+        await client.manage_subscriber_lists_by_query(
+            query, target_list_ids, action, list_ids, status
+        )
         return f"Successfully ran query-{action} on {len(target_list_ids)} list(s)"
 
     return await safe_execute_async(_ml_query_logic)  # type: ignore[no-any-return]
@@ -453,6 +463,7 @@ async def get_subscriber_bounces(subscriber_id: int) -> str:
     Args:
         subscriber_id: ID of the subscriber.
     """
+
     async def _sb_logic() -> str:
         client = get_client()
         result = await client.get_subscriber_bounces(subscriber_id)
@@ -463,7 +474,10 @@ async def get_subscriber_bounces(subscriber_id: int) -> str:
             f"- {b.get('created_at')} | {b.get('type')} | campaign {b.get('campaign_id', '-')} | {b.get('source', '?')}"
             for b in bounces
         ]
-        return f"Bounces for subscriber {subscriber_id} ({len(bounces)}):\n" + "\n".join(rows)
+        return (
+            f"Bounces for subscriber {subscriber_id} ({len(bounces)}):\n"
+            + "\n".join(rows)
+        )
 
     return await safe_execute_async(_sb_logic)  # type: ignore[no-any-return]
 
@@ -476,6 +490,7 @@ async def delete_subscriber_bounces(subscriber_id: int) -> str:
     Args:
         subscriber_id: ID of the subscriber.
     """
+
     async def _dsb_logic() -> str:
         client = get_client()
         await client.delete_subscriber_bounces(subscriber_id)
@@ -501,9 +516,12 @@ async def list_bounces(
         campaign_id: Optional campaign filter.
         source: Optional source filter (e.g. "smtp", "webhook").
     """
+
     async def _list_bounces_logic() -> str:
         client = get_client()
-        result = await client.get_bounces(page=page, per_page=per_page, campaign_id=campaign_id, source=source)
+        result = await client.get_bounces(
+            page=page, per_page=per_page, campaign_id=campaign_id, source=source
+        )
         data = result.get("data", {})
         bounces = data.get("results", []) if isinstance(data, dict) else data
         total = data.get("total", 0) if isinstance(data, dict) else len(bounces)
@@ -530,6 +548,7 @@ async def get_bounce(bounce_id: int) -> str:
     Args:
         bounce_id: ID of the bounce record.
     """
+
     async def _get_bounce_logic() -> str:
         client = get_client()
         result = await client.get_bounce(bounce_id)
@@ -555,6 +574,7 @@ async def delete_bounce(bounce_id: int) -> str:
     Args:
         bounce_id: ID of the bounce record.
     """
+
     async def _del_bounce_logic() -> str:
         client = get_client()
         await client.delete_bounce(bounce_id)
@@ -564,16 +584,18 @@ async def delete_bounce(bounce_id: int) -> str:
 
 
 @mcp.tool()
-async def delete_bounces(bounce_ids: list[int] | None = None) -> str:
+async def delete_bounces(bounce_ids: list[int] | None = None, all: bool = False) -> str:
     """
-    Delete bounce records. Pass an empty/None list to delete ALL bounces.
+    Delete selected bounce records. Set all=true explicitly to delete all.
 
     Args:
-        bounce_ids: Specific IDs to delete, or None/empty to delete all.
+        bounce_ids: Specific IDs to delete.
+        all: Explicitly delete every bounce; cannot be combined with IDs.
     """
+
     async def _del_bounces_logic() -> str:
         client = get_client()
-        await client.delete_bounces(bounce_ids)
+        await client.delete_bounces(bounce_ids, all=all)
         if bounce_ids:
             return f"Successfully deleted {len(bounce_ids)} bounce(s)"
         return "Successfully deleted ALL bounces"
@@ -582,16 +604,20 @@ async def delete_bounces(bounce_ids: list[int] | None = None) -> str:
 
 
 @mcp.tool()
-async def blocklist_bounced_subscribers(bounce_ids: list[int] | None = None) -> str:
+async def blocklist_bounced_subscribers(
+    bounce_ids: list[int] | None = None, all: bool = False
+) -> str:
     """
-    Blocklist subscribers who appear in specific bounces (or all bounces if empty).
+    Blocklist subscribers who appear in selected bounces.
 
     Args:
-        bounce_ids: Specific bounce IDs, or None/empty to blocklist subscribers from all bounces.
+        bounce_ids: Specific bounce IDs.
+        all: Explicitly target every bounce; cannot be combined with IDs.
     """
+
     async def _blbb_logic() -> str:
         client = get_client()
-        await client.blocklist_bounced_subscribers(bounce_ids)
+        await client.blocklist_bounced_subscribers(bounce_ids, all=all)
         scope = f"{len(bounce_ids)} specified bounces" if bounce_ids else "all bounces"
         return f"Successfully blocklisted subscribers from {scope}"
 
@@ -619,6 +645,7 @@ async def import_subscribers(
         overwrite: Whether to overwrite existing subscribers.
         subscription_status: "confirmed" or "unconfirmed".
     """
+
     async def _import_logic() -> str:
         client = get_client()
         result = await client.import_subscribers(
@@ -638,6 +665,7 @@ async def import_subscribers(
 @mcp.tool()
 async def get_import_status() -> str:
     """Get the status of the current/last subscriber import."""
+
     async def _status_logic() -> str:
         client = get_client()
         result = await client.get_import_status()
@@ -654,6 +682,7 @@ async def get_import_status() -> str:
 @mcp.tool()
 async def get_import_logs() -> str:
     """Get logs from the current/last subscriber import."""
+
     async def _logs_logic() -> str:
         client = get_client()
         result = await client.get_import_logs()
@@ -665,6 +694,7 @@ async def get_import_logs() -> str:
 @mcp.tool()
 async def stop_import() -> str:
     """Stop the currently running subscriber import."""
+
     async def _stop_logic() -> str:
         client = get_client()
         await client.stop_import()
@@ -683,17 +713,22 @@ async def get_subscriber_by_id(subscriber_id: str) -> str:
 
         subscriber = result.get("data", {})
 
-        lists_items = "\n".join(f"- {lst.get('name')} (ID: {lst.get('id')})" for lst in subscriber.get('lists', []))
-        attributes_items = "\n".join(f"- **{k}:** {v}" for k, v in subscriber.get('attribs', {}).items())
+        lists_items = "\n".join(
+            f"- {lst.get('name')} (ID: {lst.get('id')})"
+            for lst in subscriber.get("lists", [])
+        )
+        attributes_items = "\n".join(
+            f"- **{k}:** {v}" for k, v in subscriber.get("attribs", {}).items()
+        )
 
         return f"""# Subscriber Details
 
-**ID:** {subscriber.get('id')}
-**Email:** {subscriber.get('email')}
-**Name:** {subscriber.get('name')}
-**Status:** {subscriber.get('status')}
-**Created:** {subscriber.get('created_at')}
-**Updated:** {subscriber.get('updated_at')}
+**ID:** {subscriber.get("id")}
+**Email:** {subscriber.get("email")}
+**Name:** {subscriber.get("name")}
+**Status:** {subscriber.get("status")}
+**Created:** {subscriber.get("created_at")}
+**Updated:** {subscriber.get("updated_at")}
 
 ## Lists
 {lists_items}
@@ -715,17 +750,22 @@ async def get_subscriber_by_email(email: str) -> str:
 
         subscriber = result.get("data", {})
 
-        lists_items = "\n".join(f"- {lst.get('name')} (ID: {lst.get('id')})" for lst in subscriber.get('lists', []))
-        attributes_items = "\n".join(f"- **{k}:** {v}" for k, v in subscriber.get('attribs', {}).items())
+        lists_items = "\n".join(
+            f"- {lst.get('name')} (ID: {lst.get('id')})"
+            for lst in subscriber.get("lists", [])
+        )
+        attributes_items = "\n".join(
+            f"- **{k}:** {v}" for k, v in subscriber.get("attribs", {}).items()
+        )
 
         return f"""# Subscriber Details
 
-**ID:** {subscriber.get('id')}
-**Email:** {subscriber.get('email')}
-**Name:** {subscriber.get('name')}
-**Status:** {subscriber.get('status')}
-**Created:** {subscriber.get('created_at')}
-**Updated:** {subscriber.get('updated_at')}
+**ID:** {subscriber.get("id")}
+**Email:** {subscriber.get("email")}
+**Name:** {subscriber.get("name")}
+**Status:** {subscriber.get("status")}
+**Created:** {subscriber.get("created_at")}
+**Updated:** {subscriber.get("updated_at")}
 
 ## Lists
 {lists_items}
@@ -751,7 +791,7 @@ async def list_subscribers() -> str:
 
         subscriber_list = []
         for sub in subscribers:
-            lists_str = ", ".join(lst.get('name', '') for lst in sub.get('lists', []))
+            lists_str = ", ".join(lst.get("name", "") for lst in sub.get("lists", []))
             subscriber_list.append(
                 f"- **{sub.get('name')}** ({sub.get('email')}) - Status: {sub.get('status')} - Lists: {lists_str}"
             )
@@ -778,7 +818,7 @@ async def get_mailing_lists(
     page: int = 1,
     per_page: int = 100,
     query: str | None = None,
-    status: str | None = None
+    status: str | None = None,
 ) -> str:
     """
     Get a page of mailing lists with optional name search and status filtering.
@@ -793,19 +833,14 @@ async def get_mailing_lists(
         query: Optional search text matched against list names
         status: Optional status filter (active or archived)
     """
+
     async def _get_lists_logic() -> str:
         client = get_client()
         result = await client.get_lists(
-            page=page,
-            per_page=per_page,
-            query=query,
-            status=status
+            page=page, per_page=per_page, query=query, status=status
         )
         return _format_list_results(
-            result,
-            requested_page=page,
-            requested_per_page=per_page,
-            query=query
+            result, requested_page=page, requested_per_page=per_page, query=query
         )
 
     return await safe_execute_async(_get_lists_logic)  # type: ignore[no-any-return]
@@ -813,10 +848,7 @@ async def get_mailing_lists(
 
 @mcp.tool()
 async def search_mailing_lists(
-    query: str,
-    include_archived: bool = False,
-    page: int = 1,
-    per_page: int = 100
+    query: str, include_archived: bool = False, page: int = 1, per_page: int = 100
 ) -> str:
     """
     Search mailing lists by name and return their IDs for targeting campaigns.
@@ -843,13 +875,13 @@ async def search_mailing_lists(
             query=normalized_query,
             status=status,
             order_by="name",
-            order="ASC"
+            order="ASC",
         )
         return _format_list_results(
             result,
             requested_page=page,
             requested_per_page=per_page,
-            query=normalized_query
+            query=normalized_query,
         )
 
     return await safe_execute_async(_search_lists_logic)  # type: ignore[no-any-return]
@@ -861,7 +893,7 @@ async def create_mailing_list(
     type: str = "public",
     optin: str = "single",
     tags: list[str] | None = None,
-    description: str | None = None
+    description: str | None = None,
 ) -> str:
     """
     Create a new mailing list.
@@ -873,14 +905,11 @@ async def create_mailing_list(
         tags: List tags
         description: List description
     """
+
     async def _create_list_logic() -> str:
         client = get_client()
         result = await client.create_list(
-            name=name,
-            type=type,
-            optin=optin,
-            tags=tags or [],
-            description=description
+            name=name, type=type, optin=optin, tags=tags or [], description=description
         )
 
         list_data = result.get("data", {})
@@ -897,7 +926,7 @@ async def update_mailing_list(
     type: str | None = None,
     optin: str | None = None,
     tags: list[str] | None = None,
-    description: str | None = None
+    description: str | None = None,
 ) -> str:
     """
     Update an existing mailing list.
@@ -910,6 +939,7 @@ async def update_mailing_list(
         tags: New list tags
         description: New list description
     """
+
     async def _update_list_logic() -> str:
         client = get_client()
         await client.update_list(
@@ -918,7 +948,7 @@ async def update_mailing_list(
             type=type,
             optin=optin,
             tags=tags,
-            description=description
+            description=description,
         )
 
         return f"Successfully updated mailing list {list_id}"
@@ -934,6 +964,7 @@ async def delete_mailing_list(list_id: int) -> str:
     Args:
         list_id: ID of the list to delete
     """
+
     async def _delete_list_logic() -> str:
         client = get_client()
         await client.delete_list(list_id)
@@ -945,9 +976,7 @@ async def delete_mailing_list(list_id: int) -> str:
 
 @mcp.tool()
 async def get_list_subscribers_tool(
-    list_id: int,
-    page: int = 1,
-    per_page: int = 20
+    list_id: int, page: int = 1, per_page: int = 20
 ) -> str:
     """
     Get subscribers for a specific mailing list.
@@ -957,12 +986,11 @@ async def get_list_subscribers_tool(
         page: Page number for pagination
         per_page: Number of subscribers per page
     """
+
     async def _get_list_subscribers_logic() -> str:
         client = get_client()
         result = await client.get_list_subscribers(
-            list_id=list_id,
-            page=page,
-            per_page=per_page
+            list_id=list_id, page=page, per_page=per_page
         )
 
         data = result.get("data", {})
@@ -976,9 +1004,7 @@ async def get_list_subscribers_tool(
 # Campaign Management Tools
 @mcp.tool()
 async def get_campaigns(
-    status: str | None = None,
-    page: int = 1,
-    per_page: int = 20
+    status: str | None = None, page: int = 1, per_page: int = 20
 ) -> str:
     """
     Get all campaigns with optional status filter.
@@ -988,6 +1014,7 @@ async def get_campaigns(
         page: Page number for pagination
         per_page: Number of campaigns per page
     """
+
     async def _get_campaigns_logic() -> str:
         client = get_client()
         result = await client.get_campaigns(page=page, per_page=per_page, status=status)
@@ -1008,7 +1035,9 @@ async def get_campaigns(
                 f"Lists: [{lists_str}]"
             )
 
-        return f"Found {total} campaigns (showing {len(campaigns)}):\n" + "\n".join(campaign_items)
+        return f"Found {total} campaigns (showing {len(campaigns)}):\n" + "\n".join(
+            campaign_items
+        )
 
     return await safe_execute_async(_get_campaigns_logic)  # type: ignore[no-any-return]
 
@@ -1021,21 +1050,22 @@ async def get_campaign(campaign_id: int) -> str:
     Args:
         campaign_id: ID of the campaign to retrieve
     """
+
     async def _get_campaign_logic() -> str:
         client = get_client()
         result = await client.get_campaign(campaign_id)
 
         campaign = result.get("data", {})
-        body = campaign.get('body', 'No content')
+        body = campaign.get("body", "No content")
         lists_str = ", ".join(str(lst.get("id")) for lst in campaign.get("lists", []))
 
-        return f"""Campaign ID: {campaign.get('id')}
-Name: {campaign.get('name')}
-Subject: {campaign.get('subject')}
-Status: {campaign.get('status')}
-Template ID: {campaign.get('template_id')}
+        return f"""Campaign ID: {campaign.get("id")}
+Name: {campaign.get("name")}
+Subject: {campaign.get("subject")}
+Status: {campaign.get("status")}
+Template ID: {campaign.get("template_id")}
 Lists: [{lists_str}]
-Content Type: {campaign.get('content_type', 'richtext')}
+Content Type: {campaign.get("content_type", "richtext")}
 
 Body:
 {body}"""
@@ -1052,7 +1082,7 @@ async def create_campaign(
     content_type: str = "richtext",
     body: str | None = None,
     template_id: int | None = None,
-    tags: list[str] | None = None
+    tags: list[str] | None = None,
 ) -> str:
     """
     Create a new email campaign.
@@ -1067,6 +1097,7 @@ async def create_campaign(
         template_id: Template ID to use (optional)
         tags: Campaign tags
     """
+
     async def _create_campaign_logic() -> str:
         client = get_client()
 
@@ -1095,7 +1126,7 @@ async def create_campaign(
             content_type=content_type,
             body=body,
             template_id=template_id,
-            tags=tags or []
+            tags=tags or [],
         )
 
         campaign_data = result.get("data", {})
@@ -1119,7 +1150,7 @@ async def update_campaign(
     subject: str | None = None,
     lists: list[int] | None = None,
     body: str | None = None,
-    tags: list[str] | None = None
+    tags: list[str] | None = None,
 ) -> str:
     """
     Update an existing campaign.
@@ -1132,6 +1163,7 @@ async def update_campaign(
         body: New campaign content
         tags: New campaign tags
     """
+
     async def _update_campaign_logic() -> str:
         client = get_client()
         await client.update_campaign(
@@ -1140,7 +1172,7 @@ async def update_campaign(
             subject=subject,
             lists=lists,
             body=body,
-            tags=tags
+            tags=tags,
         )
 
         return f"Successfully updated campaign {campaign_id}"
@@ -1156,6 +1188,7 @@ async def send_campaign(campaign_id: int) -> str:
     Args:
         campaign_id: ID of the campaign to send
     """
+
     async def _send_campaign_logic() -> str:
         client = get_client()
         await client.send_campaign(campaign_id)
@@ -1174,6 +1207,7 @@ async def schedule_campaign(campaign_id: int, send_at: str) -> str:
         campaign_id: ID of the campaign to schedule
         send_at: ISO datetime string for when to send (e.g., '2024-12-25T10:00:00Z')
     """
+
     async def _schedule_campaign_logic() -> str:
         client = get_client()
         await client.schedule_campaign(campaign_id, send_at)
@@ -1195,11 +1229,14 @@ async def test_campaign(campaign_id: int, subscribers: list[str]) -> str:
             up by email and skips unknown addresses). Add them via
             add_subscriber first if needed.
     """
+
     async def _test_campaign_logic() -> str:
         client = get_client()
         await client.test_campaign(campaign_id, subscribers)
         recipients = ", ".join(subscribers)
-        return f"Successfully queued test send of campaign {campaign_id} to: {recipients}"
+        return (
+            f"Successfully queued test send of campaign {campaign_id} to: {recipients}"
+        )
 
     return await safe_execute_async(_test_campaign_logic)  # type: ignore[no-any-return]
 
@@ -1213,6 +1250,7 @@ async def change_campaign_status(campaign_id: int, status: str) -> str:
         campaign_id: ID of the campaign.
         status: One of "draft", "scheduled", "running", "paused", "cancelled".
     """
+
     async def _change_status_logic() -> str:
         client = get_client()
         await client.change_campaign_status(campaign_id, status)
@@ -1239,6 +1277,7 @@ async def archive_campaign(
         archive_meta: Extra metadata for the archive entry (optional).
         archive_slug: URL slug for the archive page (optional).
     """
+
     async def _archive_logic() -> str:
         client = get_client()
         await client.archive_campaign(
@@ -1262,6 +1301,7 @@ async def delete_campaign(campaign_id: int) -> str:
     Args:
         campaign_id: ID of the campaign to delete.
     """
+
     async def _delete_campaign_logic() -> str:
         client = get_client()
         await client.delete_campaign(campaign_id)
@@ -1278,6 +1318,7 @@ async def delete_campaigns(campaign_ids: list[int]) -> str:
     Args:
         campaign_ids: List of campaign IDs to delete.
     """
+
     async def _delete_campaigns_logic() -> str:
         client = get_client()
         await client.delete_campaigns(campaign_ids)
@@ -1289,6 +1330,7 @@ async def delete_campaigns(campaign_ids: list[int]) -> str:
 @mcp.tool()
 async def get_running_campaign_stats() -> str:
     """Get live stats for currently running campaigns (sent, to_send, rate, ETA)."""
+
     async def _stats_logic() -> str:
         client = get_client()
         result = await client.get_running_campaign_stats()
@@ -1314,8 +1356,10 @@ async def get_running_campaign_stats() -> str:
 async def get_campaign_analytics(
     analytics_type: str,
     campaign_ids: list[int],
-    from_date: str | None = None,
-    to_date: str | None = None,
+    from_date: str,
+    to_date: str,
+    interval: str = "day",
+    unique: bool = False,
 ) -> str:
     """
     Get campaign analytics (views, clicks, links, or bounces).
@@ -1323,13 +1367,19 @@ async def get_campaign_analytics(
     Args:
         analytics_type: One of "views", "clicks", "links", "bounces".
         campaign_ids: Campaigns to fetch analytics for.
-        from_date: Optional ISO date lower bound (e.g. "2026-01-01").
-        to_date: Optional ISO date upper bound.
+        from_date: Required ISO date lower bound (e.g. "2026-01-01").
+        to_date: Required ISO date upper bound.
     """
+
     async def _analytics_logic() -> str:
         client = get_client()
         result = await client.get_campaign_analytics(
-            analytics_type, campaign_ids, from_date=from_date, to_date=to_date
+            analytics_type,
+            campaign_ids,
+            from_date=from_date,
+            to_date=to_date,
+            interval=interval,
+            unique=unique,
         )
         return f"Analytics ({analytics_type}) for campaigns {campaign_ids}: {result.get('data', [])}"
 
@@ -1350,10 +1400,10 @@ async def list_campaigns() -> str:
 
         campaign_list = []
         for camp in campaigns:
-            lists_str = ", ".join(lst.get('name', '') for lst in camp.get('lists', []))
-            status = camp.get('status', 'unknown')
-            sent = camp.get('sent', 0)
-            to_send = camp.get('to_send', 0)
+            lists_str = ", ".join(lst.get("name", "") for lst in camp.get("lists", []))
+            status = camp.get("status", "unknown")
+            sent = camp.get("sent", 0)
+            to_send = camp.get("to_send", 0)
 
             campaign_list.append(
                 f"- **{camp.get('name')}** - Status: {status} - Sent: {sent}/{to_send} - Lists: {lists_str}"
@@ -1386,34 +1436,34 @@ async def get_campaign_by_id(campaign_id: str) -> str:
 
         # Format lists
         lists_info = []
-        for lst in campaign.get('lists', []):
+        for lst in campaign.get("lists", []):
             lists_info.append(f"- {lst.get('name')} (ID: {lst.get('id')})")
 
         # Format tags
-        tags = campaign.get('tags', [])
+        tags = campaign.get("tags", [])
         tags_str = ", ".join(tags) if tags else "None"
 
         lists_items = "\n".join(lists_info) if lists_info else "No lists assigned"
 
         return f"""# Campaign Details
 
-**ID:** {campaign.get('id')}
-**Name:** {campaign.get('name')}
-**Subject:** {campaign.get('subject')}
-**Status:** {campaign.get('status')}
-**Type:** {campaign.get('type', 'regular')}
-**Content Type:** {campaign.get('content_type', 'richtext')}
+**ID:** {campaign.get("id")}
+**Name:** {campaign.get("name")}
+**Subject:** {campaign.get("subject")}
+**Status:** {campaign.get("status")}
+**Type:** {campaign.get("type", "regular")}
+**Content Type:** {campaign.get("content_type", "richtext")}
 
 ## Statistics
-**To Send:** {campaign.get('to_send', 0)}
-**Sent:** {campaign.get('sent', 0)}
-**Views:** {campaign.get('views', 0)}
-**Clicks:** {campaign.get('clicks', 0)}
+**To Send:** {campaign.get("to_send", 0)}
+**Sent:** {campaign.get("sent", 0)}
+**Views:** {campaign.get("views", 0)}
+**Clicks:** {campaign.get("clicks", 0)}
 
 ## Timing
-**Created:** {campaign.get('created_at')}
-**Updated:** {campaign.get('updated_at')}
-**Started:** {campaign.get('started_at', 'Not started')}
+**Created:** {campaign.get("created_at")}
+**Updated:** {campaign.get("updated_at")}
+**Started:** {campaign.get("started_at", "Not started")}
 
 ## Lists
 {lists_items}
@@ -1422,7 +1472,7 @@ async def get_campaign_by_id(campaign_id: str) -> str:
 {tags_str}
 
 ## Template
-**Template ID:** {campaign.get('template_id', 'None')}
+**Template ID:** {campaign.get("template_id", "None")}
 """
 
     except ListmonkAPIError as e:
@@ -1463,16 +1513,14 @@ async def list_mailing_lists() -> str:
         client = get_client()
         result = await client.get_lists(page=1, per_page=100)
         lists, total, page, per_page = _extract_list_page(
-            result,
-            requested_page=1,
-            requested_per_page=100
+            result, requested_page=1, requested_per_page=100
         )
 
         list_items = []
         for lst in lists:
-            subscriber_count = lst.get('subscriber_count', 0)
+            subscriber_count = lst.get("subscriber_count", 0)
             # status = lst.get('status', 'active')  # unused
-            tags = lst.get('tags', [])
+            tags = lst.get("tags", [])
             tags_str = ", ".join(tags) if tags else "None"
 
             list_items.append(
@@ -1505,29 +1553,29 @@ async def get_list_by_id(list_id: str) -> str:
         list_data = result.get("data", {})
 
         # Format tags
-        tags = list_data.get('tags', [])
+        tags = list_data.get("tags", [])
         tags_str = ", ".join(tags) if tags else "None"
 
         return f"""# Mailing List Details
 
-**ID:** {list_data.get('id')}
-**Name:** {list_data.get('name')}
-**Type:** {list_data.get('type', 'public')}
-**Opt-in:** {list_data.get('optin', 'single')}
-**Status:** {list_data.get('status', 'active')}
+**ID:** {list_data.get("id")}
+**Name:** {list_data.get("name")}
+**Type:** {list_data.get("type", "public")}
+**Opt-in:** {list_data.get("optin", "single")}
+**Status:** {list_data.get("status", "active")}
 
 ## Statistics
-**Subscriber Count:** {list_data.get('subscriber_count', 0)}
+**Subscriber Count:** {list_data.get("subscriber_count", 0)}
 
 ## Details
-**Created:** {list_data.get('created_at')}
-**Updated:** {list_data.get('updated_at')}
+**Created:** {list_data.get("created_at")}
+**Updated:** {list_data.get("updated_at")}
 
 ## Tags
 {tags_str}
 
 ## Description
-{list_data.get('description', 'No description provided')}
+{list_data.get("description", "No description provided")}
 
 *Use get_list_subscribers_tool to see subscribers for this list.*
 """
@@ -1549,14 +1597,18 @@ async def get_list_subscribers_resource(list_id: str) -> str:
 
         subscriber_list = []
         for sub in subscribers:
-            status = sub.get('status', 'unknown')
-            created = sub.get('created_at', 'Unknown')
+            status = sub.get("status", "unknown")
+            created = sub.get("created_at", "Unknown")
 
             subscriber_list.append(
                 f"- **{sub.get('name')}** ({sub.get('email')}) - Status: {status} - Joined: {created}"
             )
 
-        subscriber_items = "\n".join(subscriber_list) if subscriber_list else "No subscribers in this list"
+        subscriber_items = (
+            "\n".join(subscriber_list)
+            if subscriber_list
+            else "No subscribers in this list"
+        )
 
         return f"""# List Subscribers
 
@@ -1581,6 +1633,7 @@ async def get_templates() -> str:
 
     Returns a list of all templates with their IDs, names, types, and default status.
     """
+
     async def _get_templates_logic() -> str:
         client = get_client()
         result = await client.get_templates()
@@ -1593,7 +1646,7 @@ async def get_templates() -> str:
 
         template_items = []
         for t in templates:
-            default_marker = " (DEFAULT)" if t.get('is_default', False) else ""
+            default_marker = " (DEFAULT)" if t.get("is_default", False) else ""
             template_items.append(
                 f"- ID: {t.get('id')} | {t.get('name')} | "
                 f"Type: {t.get('type', 'campaign')}{default_marker}"
@@ -1612,17 +1665,19 @@ async def get_template(template_id: int) -> str:
     Args:
         template_id: ID of the template to retrieve
     """
+
     async def _get_template_logic() -> str:
         client = get_client()
         result = await client.get_template(template_id)
 
         template = result.get("data", {})
-        body = template.get('body', 'No content')
+        body = template.get("body", "No content")
 
-        return f"""Template ID: {template.get('id')}
-Name: {template.get('name')}
-Type: {template.get('type', 'campaign')}
-Default: {template.get('is_default', False)}
+        return f"""Template ID: {template.get("id")}
+Name: {template.get("name")}
+Type: {template.get("type", "campaign")}
+Default: {template.get("is_default", False)}
+Subject: {template.get("subject", "")}
 
 Body:
 {body}"""
@@ -1635,7 +1690,8 @@ async def create_template(
     name: str,
     body: str,
     type: str = "campaign",
-    is_default: bool = False
+    is_default: bool = False,
+    subject: str | None = None,
 ) -> str:
     """
     Create a new email template.
@@ -1645,14 +1701,13 @@ async def create_template(
         body: Template HTML body content
         type: Template type (campaign, tx)
         is_default: Whether this is the default template
+        subject: Required email subject for transactional (tx) templates
     """
+
     async def _create_template_logic() -> str:
         client = get_client()
         result = await client.create_template(
-            name=name,
-            body=body,
-            type=type,
-            is_default=is_default
+            name=name, body=body, type=type, is_default=is_default, subject=subject
         )
 
         template_data = result.get("data", {})
@@ -1668,7 +1723,7 @@ async def update_template(
     name: str | None = None,
     body: str | None = None,
     is_default: bool | None = None,
-    subject: str | None = None
+    subject: str | None = None,
 ) -> str:
     """
     Update an existing email template.
@@ -1680,6 +1735,7 @@ async def update_template(
         is_default: Whether this is the default template
         subject: Email subject line (required for transactional templates, carried forward from existing template if omitted)
     """
+
     async def _update_template_logic() -> str:
         client = get_client()
         await client.update_template(
@@ -1687,7 +1743,7 @@ async def update_template(
             name=name,
             body=body,
             is_default=is_default,
-            subject=subject
+            subject=subject,
         )
 
         return f"Successfully updated template {template_id}"
@@ -1703,6 +1759,7 @@ async def delete_template(template_id: int) -> str:
     Args:
         template_id: ID of the template to delete
     """
+
     async def _delete_template_logic() -> str:
         client = get_client()
         await client.delete_template(template_id)
@@ -1720,6 +1777,7 @@ async def set_default_template(template_id: int) -> str:
     Args:
         template_id: ID of the template to set as default.
     """
+
     async def _set_default_logic() -> str:
         client = get_client()
         await client.set_default_template(template_id)
@@ -1737,6 +1795,7 @@ async def preview_template_body(body: str, template_type: str = "campaign") -> s
         body: Template HTML body.
         template_type: One of "campaign" (default), "campaign_visual", "tx".
     """
+
     async def _preview_body_logic() -> str:
         client = get_client()
         result = await client.preview_template_body(body, template_type)
@@ -1757,6 +1816,7 @@ async def get_settings() -> str:
     Do not PUT this back via update_settings — use update_setting for individual keys
     or scrub secret-looking keys first.
     """
+
     async def _get_settings_logic() -> str:
         client = get_client()
         result = await client.get_settings()
@@ -1775,6 +1835,7 @@ async def update_settings(settings: dict[str, Any]) -> str:
     keys from `settings` before calling this — or prefer `update_setting` for
     a single key.
     """
+
     async def _update_settings_logic() -> str:
         client = get_client()
         await client.update_settings(settings)
@@ -1792,6 +1853,7 @@ async def update_setting(key: str, value: Any) -> str:
         key: Dotted setting key (e.g. "appearance.public.custom_css").
         value: New value.
     """
+
     async def _update_one_logic() -> str:
         client = get_client()
         await client.update_setting(key, value)
@@ -1808,6 +1870,7 @@ async def test_smtp_settings(settings: dict[str, Any]) -> str:
     Args:
         settings: SMTP config with host/port/username/password/etc.
     """
+
     async def _test_smtp_logic() -> str:
         client = get_client()
         await client.test_smtp_settings(settings)
@@ -1819,6 +1882,7 @@ async def test_smtp_settings(settings: dict[str, Any]) -> str:
 @mcp.tool()
 async def reload_app() -> str:
     """Trigger a hot-reload of the Listmonk app (re-reads settings)."""
+
     async def _reload_logic() -> str:
         client = get_client()
         await client.reload_app()
@@ -1830,6 +1894,7 @@ async def reload_app() -> str:
 @mcp.tool()
 async def get_logs() -> str:
     """Get recent server logs."""
+
     async def _logs_logic() -> str:
         client = get_client()
         result = await client.get_logs()
@@ -1841,10 +1906,11 @@ async def get_logs() -> str:
 @mcp.tool()
 async def get_about_info() -> str:
     """Get version / build / runtime info about this Listmonk instance."""
+
     async def _about_logic() -> str:
         client = get_client()
         result = await client.get_about_info()
-        return f"About:\n{result.get('data', {})}"
+        return f"About:\n{result.get('data', result)}"
 
     return await safe_execute_async(_about_logic)  # type: ignore[no-any-return]
 
@@ -1852,6 +1918,7 @@ async def get_about_info() -> str:
 @mcp.tool()
 async def get_dashboard_counts() -> str:
     """Get dashboard counts (subscribers, lists, campaigns, etc)."""
+
     async def _counts_logic() -> str:
         client = get_client()
         result = await client.get_dashboard_counts()
@@ -1864,6 +1931,7 @@ async def get_dashboard_counts() -> str:
 @mcp.tool()
 async def get_dashboard_charts() -> str:
     """Get dashboard chart data (campaign views, link clicks over time)."""
+
     async def _charts_logic() -> str:
         client = get_client()
         result = await client.get_dashboard_charts()
@@ -1879,8 +1947,9 @@ async def gc_subscribers(gc_type: str) -> str:
     Garbage collect subscribers.
 
     Args:
-        gc_type: One of "blocklisted", "orphan", "unconfirmed".
+        gc_type: One of "blocklisted", "orphan".
     """
+
     async def _gc_subs_logic() -> str:
         client = get_client()
         await client.gc_subscribers(gc_type)
@@ -1890,16 +1959,18 @@ async def gc_subscribers(gc_type: str) -> str:
 
 
 @mcp.tool()
-async def gc_campaign_analytics(analytics_type: str) -> str:
+async def gc_campaign_analytics(analytics_type: str, before: str) -> str:
     """
     Garbage collect campaign analytics.
 
     Args:
-        analytics_type: One of "views", "clicks", "links", "bounces", "all".
+        analytics_type: One of "views", "clicks", "all".
+        before: Required RFC3339 timestamp; only older analytics are deleted.
     """
+
     async def _gc_analytics_logic() -> str:
         client = get_client()
-        await client.gc_campaign_analytics(analytics_type)
+        await client.gc_campaign_analytics(analytics_type, before)
         return f"Successfully ran analytics GC ({analytics_type})"
 
     return await safe_execute_async(_gc_analytics_logic)  # type: ignore[no-any-return]
@@ -1913,6 +1984,7 @@ async def gc_unconfirmed_subscriptions(before: str) -> str:
     Args:
         before: ISO timestamp; subscriptions created before this are removed.
     """
+
     async def _gc_unconfirmed_logic() -> str:
         client = get_client()
         await client.gc_unconfirmed_subscriptions(before)
@@ -1926,7 +1998,7 @@ async def send_transactional_email(
     template_id: int,
     subscriber_email: str,
     data: dict[str, Any] | None = None,
-    content_type: str = "html"
+    content_type: str = "html",
 ) -> str:
     """
     Send a transactional email using a template.
@@ -1937,13 +2009,14 @@ async def send_transactional_email(
         data: Template variables/data
         content_type: Content type (html, plain)
     """
+
     async def _send_transactional_logic() -> str:
         client = get_client()
         await client.send_transactional_email(
             template_id=template_id,
             subscriber_email=subscriber_email,
             data=data or {},
-            content_type=content_type
+            content_type=content_type,
         )
 
         return f"Successfully sent transactional email to {subscriber_email}"
@@ -1964,8 +2037,8 @@ async def list_templates() -> str:
 
         template_list = []
         for template in templates:
-            template_type = template.get('type', 'campaign')
-            is_default = template.get('is_default', False)
+            template_type = template.get("type", "campaign")
+            is_default = template.get("is_default", False)
             default_marker = " (DEFAULT)" if is_default else ""
 
             template_list.append(
@@ -1997,19 +2070,19 @@ async def get_template_by_id(template_id: str) -> str:
         template = result.get("data", {})
 
         # Format the body content preview (truncate if too long)
-        body = template.get('body', '')
+        body = template.get("body", "")
         body_preview = body[:500] + "..." if len(body) > 500 else body
 
         return f"""# Template Details
 
-**ID:** {template.get('id')}
-**Name:** {template.get('name')}
-**Type:** {template.get('type', 'campaign')}
-**Default:** {"Yes" if template.get('is_default') else "No"}
+**ID:** {template.get("id")}
+**Name:** {template.get("name")}
+**Type:** {template.get("type", "campaign")}
+**Default:** {"Yes" if template.get("is_default") else "No"}
 
 ## Timing
-**Created:** {template.get('created_at')}
-**Updated:** {template.get('updated_at')}
+**Created:** {template.get("created_at")}
+**Updated:** {template.get("updated_at")}
 
 ## Template Body Preview
 ```html
@@ -2031,12 +2104,12 @@ async def get_template_preview(template_id: str) -> str:
         result = await client.get_template(int(template_id))
 
         template = result.get("data", {})
-        body = template.get('body', 'No content available')
+        body = template.get("body", "No content available")
 
         return f"""# Template Full Content
 
 **Template ID:** {template_id}
-**Template Name:** {template.get('name')}
+**Template Name:** {template.get("name")}
 
 ## Full HTML Body
 ```html
@@ -2052,44 +2125,38 @@ async def get_template_preview(template_id: str) -> str:
 
 # Media Management Tools
 @mcp.tool()
-async def get_media_list() -> str:
+async def get_media_list(
+    page: int = 1,
+    per_page: int = 20,
+    query: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
     """
     Get all media files from Listmonk.
 
     Returns a list of all uploaded media with their IDs, filenames, URLs, and metadata.
     """
+
     async def _get_media_logic() -> str:
         client = get_client()
-        result = await client.get_media()
-
-        # Debug: Check what we actually got
-        if not isinstance(result, dict):
-            return f"Error: Unexpected response type: {type(result)}. Response: {result}"
-
-        data = result.get("data", [])
-
-        # Handle both list and dict formats (Listmonk can return either)
-        if isinstance(data, dict):
-            # If it's a dict, it might be empty or have numbered keys
-            if not data:
-                return "No media files found."
-            # Convert dict values to list
-            media_list = list(data.values()) if data else []
-        else:
-            # It's already a list
-            media_list = data
-
-        # Flatten if the first element is itself a list (nested structure)
-        if media_list and isinstance(media_list[0], list):
-            media_list = media_list[0]
+        result = await client.get_media(
+            page=page, per_page=per_page, query=query, tags=tags
+        )
+        media_list, total, page_number, page_size = _extract_list_page(
+            result, page, per_page
+        )
 
         if not media_list:
             return "No media files found."
 
         media_items = []
         for media in media_list:
-            created = media.get('created_at', 'Unknown')[:10]  # Just the date part
-            size_bytes = media.get('meta', {}).get('size', 0) if isinstance(media.get('meta'), dict) else 0
+            created = media.get("created_at", "Unknown")[:10]  # Just the date part
+            size_bytes = (
+                media.get("meta", {}).get("size", 0)
+                if isinstance(media.get("meta"), dict)
+                else 0
+            )
             size_kb = size_bytes / 1024 if size_bytes > 0 else 0
             media_items.append(
                 f"- ID: {media.get('id')} | {media.get('filename')} | "
@@ -2099,16 +2166,16 @@ async def get_media_list() -> str:
                 f"  URL: {media.get('url', 'No URL')}"
             )
 
-        return f"Found {len(media_list)} media files:\n" + "\n".join(media_items)
+        return (
+            f"Found {total} media files (page {page_number}, {page_size} per page):\n"
+            + "\n".join(media_items)
+        )
 
     return await safe_execute_async(_get_media_logic)  # type: ignore[no-any-return]
 
 
 @mcp.tool()
-async def upload_media_file(
-    file_path: str,
-    title: str | None = None
-) -> str:
+async def upload_media_file(file_path: str, title: str | None = None) -> str:
     """
     Upload a media file to Listmonk.
 
@@ -2119,6 +2186,7 @@ async def upload_media_file(
     Returns:
         Success message with the uploaded file's URL
     """
+
     async def _upload_media_logic() -> str:
         client = get_client()
         result = await client.upload_media(file_path, title)
@@ -2135,16 +2203,11 @@ async def upload_media_file(
 
 @mcp.tool()
 async def rename_media(media_id: int, new_title: str) -> str:
-    """
-    Rename/update the title of a media file.
+    """Deprecated: Listmonk does not support renaming media titles.
 
-    Args:
-        media_id: ID of the media file to rename
-        new_title: New title/description for the media file
-
-    Returns:
-        Success message
+    This compatibility tool reports an error; use update_media_tags on v7.
     """
+
     async def _rename_media_logic() -> str:
         client = get_client()
         await client.update_media(media_id, new_title)
@@ -2152,6 +2215,17 @@ async def rename_media(media_id: int, new_title: str) -> str:
         return f"Successfully renamed media {media_id} to '{new_title}'"
 
     return await safe_execute_async(_rename_media_logic)  # type: ignore[no-any-return]
+
+
+@mcp.tool()
+async def update_media_tags(media_id: int, tags: list[str]) -> str:
+    """Replace tags on a media item (Listmonk v7+). Pass [] to clear tags."""
+
+    async def _update_tags() -> str:
+        await get_client().update_media_tags(media_id, tags)
+        return f"Updated tags on media {media_id}"
+
+    return await safe_execute_async(_update_tags)  # type: ignore[no-any-return]
 
 
 @mcp.tool()
@@ -2165,6 +2239,7 @@ async def delete_media_file(media_id: int) -> str:
     Returns:
         Success message
     """
+
     async def _delete_media_logic() -> str:
         client = get_client()
         await client.delete_media(media_id)
@@ -2182,28 +2257,20 @@ async def list_media_files() -> str:
         client = get_client()
         result = await client.get_media()
 
-        data = result.get("data", [])
-
-        # Handle both list and dict formats
-        if isinstance(data, dict):
-            if not data:
-                return "# Media Files\n\nNo media files found."
-            media_list = list(data.values())
-        else:
-            media_list = data
-
-        # Flatten if the first element is itself a list (nested structure)
-        if media_list and isinstance(media_list[0], list):
-            media_list = media_list[0]
+        media_list, total, page_number, page_size = _extract_list_page(result, 1, 20)
 
         if not media_list:
             return "# Media Files\n\nNo media files found."
 
         media_items = []
         for media in media_list:
-            size_bytes = media.get('meta', {}).get('size', 0) if isinstance(media.get('meta'), dict) else 0
+            size_bytes = (
+                media.get("meta", {}).get("size", 0)
+                if isinstance(media.get("meta"), dict)
+                else 0
+            )
             size_kb = size_bytes / 1024 if size_bytes > 0 else 0
-            created = media.get('created_at', 'Unknown')
+            created = media.get("created_at", "Unknown")
             media_items.append(
                 f"- **{media.get('filename')}** (ID: {media.get('id')})\n"
                 f"  - Title: {media.get('title', media.get('filename', 'No title'))}\n"
@@ -2220,7 +2287,7 @@ async def list_media_files() -> str:
 
 {media_items_text}
 
-*Use upload_media_file to add new files, rename_media to update titles, or delete_media_file to remove files.*
+*Use upload_media_file to add files, update_media_tags to change v7 tags, or delete_media_file to remove files.*
 """
 
     except ListmonkAPIError as e:
@@ -2229,12 +2296,9 @@ async def list_media_files() -> str:
 
 # Campaign Body Editing Tools
 
+
 @mcp.tool()
-async def replace_in_campaign_body(
-    campaign_id: int,
-    search: str,
-    replace: str
-) -> str:
+async def replace_in_campaign_body(campaign_id: int, search: str, replace: str) -> str:
     """
     Search and replace text in a campaign body (simple string matching).
 
@@ -2255,6 +2319,7 @@ async def replace_in_campaign_body(
             replace="</p>\n<img src='https://...' style='...'>"
         )
     """
+
     async def _replace_logic() -> str:
         client = get_client()
 
@@ -2280,7 +2345,7 @@ async def replace_in_campaign_body(
             name=campaign.get("name"),
             subject=campaign.get("subject"),
             lists=[lst["id"] for lst in campaign.get("lists", [])],
-            body=new_body
+            body=new_body,
         )
 
         return f"Successfully replaced {count} occurrence(s) in campaign {campaign_id}"
@@ -2290,9 +2355,7 @@ async def replace_in_campaign_body(
 
 @mcp.tool()
 async def regex_replace_in_campaign_body(
-    campaign_id: int,
-    pattern: str,
-    replace: str
+    campaign_id: int, pattern: str, replace: str
 ) -> str:
     """
     Search and replace in campaign body using regex patterns.
@@ -2314,6 +2377,7 @@ async def regex_replace_in_campaign_body(
             replace=r"\\1\n<img src='https://...'>"
         )
     """
+
     async def _regex_replace_logic() -> str:
         import re
 
@@ -2340,7 +2404,7 @@ async def regex_replace_in_campaign_body(
             name=campaign.get("name"),
             subject=campaign.get("subject"),
             lists=[lst["id"] for lst in campaign.get("lists", [])],
-            body=new_body
+            body=new_body,
         )
 
         return f"Successfully replaced {count} match(es) in campaign {campaign_id}"
@@ -2350,8 +2414,7 @@ async def regex_replace_in_campaign_body(
 
 @mcp.tool()
 async def batch_replace_in_campaign_body(
-    campaign_id: int,
-    replacements: list[dict[str, str]]
+    campaign_id: int, replacements: list[dict[str, str]]
 ) -> str:
     """
     Perform multiple search-and-replace operations in one go.
@@ -2374,6 +2437,7 @@ async def batch_replace_in_campaign_body(
             ]
         )
     """
+
     async def _batch_replace_logic() -> str:
         client = get_client()
 
@@ -2409,7 +2473,7 @@ async def batch_replace_in_campaign_body(
             name=campaign.get("name"),
             subject=campaign.get("subject"),
             lists=[lst["id"] for lst in campaign.get("lists", [])],
-            body=new_body
+            body=new_body,
         )
 
         return f"Successfully completed {len(replacements)} replacement operation(s) with {total_count} total change(s) in campaign {campaign_id}"
@@ -2421,30 +2485,19 @@ async def batch_replace_in_campaign_body(
 cli_app = typer.Typer(
     name="listmonk-mcp",
     help="Listmonk MCP Server - Connect Claude Code to Listmonk via Model Context Protocol",
-    add_completion=False
+    add_completion=False,
 )
 
 
 @cli_app.command()
 def run(
-    config_file: str = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to configuration file (.env format)"
+    config_file: str | None = typer.Option(
+        None, "--config", "-c", help="Path to configuration file (.env format)"
     ),
-    debug: bool = typer.Option(
-        False,
-        "--debug",
-        "-d",
-        help="Enable debug logging"
-    ),
+    debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug logging"),
     version: bool = typer.Option(
-        False,
-        "--version",
-        "-v",
-        help="Show version and exit"
-    )
+        False, "--version", "-v", help="Show version and exit"
+    ),
 ) -> None:
     """
     Start the Listmonk MCP server.
@@ -2464,9 +2517,12 @@ def run(
         # Import here to avoid circular imports
         try:
             from importlib.metadata import version as get_version
+
             pkg_version = get_version("listmonk-mcp")
-        except ImportError:
-            pkg_version = "0.0.1"  # fallback
+        except Exception:
+            from . import __version__
+
+            pkg_version = __version__
         typer.echo(f"listmonk-mcp {pkg_version}")
         raise typer.Exit()
 
@@ -2475,6 +2531,11 @@ def run(
         logger.debug("Debug logging enabled")
 
     try:
+        global _config
+        _config = load_config(config_file)
+        logging.getLogger().setLevel(
+            logging.DEBUG if debug or _config.debug else _config.log_level
+        )
         logger.info("Starting Listmonk MCP Server...")
         # Create the production MCP server with lifespan management
         server = create_production_server()

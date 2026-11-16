@@ -11,8 +11,8 @@ class Config(BaseSettings):
 
     # Listmonk configuration
     url: str = Field(..., description="Listmonk server URL")
-    username: str = Field(..., description="API username")
-    password: str = Field(..., description="API token")
+    username: str = Field(..., min_length=1, description="API username")
+    password: str = Field(..., min_length=1, repr=False, description="API token")
     timeout: int = Field(default=30, description="Request timeout in seconds")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
 
@@ -22,22 +22,23 @@ class Config(BaseSettings):
     server_name: str = Field(default="Listmonk MCP Server", description="Server name")
 
     model_config = SettingsConfigDict(
-        env_prefix='LISTMONK_MCP_',
-        env_file='.env',
-        env_file_encoding='utf-8',
+        env_prefix="LISTMONK_MCP_",
+        env_file=".env",
+        env_file_encoding="utf-8",
         case_sensitive=False,
-        extra='ignore'
+        extra="ignore",
+        hide_input_in_errors=True,
     )
 
-    @field_validator('url')
+    @field_validator("url")
     @classmethod
     def validate_url(cls, v: str) -> str:
         """Validate URL format."""
-        if not v.startswith(('http://', 'https://')):
+        if not v.startswith(("http://", "https://")):
             raise ValueError("URL must start with http:// or https://")
-        return v.rstrip('/')
+        return v.rstrip("/")
 
-    @field_validator('timeout')
+    @field_validator("timeout")
     @classmethod
     def validate_timeout(cls, v: int) -> int:
         """Validate timeout is positive."""
@@ -45,7 +46,7 @@ class Config(BaseSettings):
             raise ValueError("Timeout must be positive")
         return v
 
-    @field_validator('max_retries')
+    @field_validator("max_retries")
     @classmethod
     def validate_max_retries(cls, v: int) -> int:
         """Validate max_retries is non-negative."""
@@ -53,16 +54,15 @@ class Config(BaseSettings):
             raise ValueError("Max retries must be non-negative")
         return v
 
-    @field_validator('log_level')
+    @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
         """Validate log level."""
-        valid_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         v_upper = v.upper()
         if v_upper not in valid_levels:
             raise ValueError(f"Log level must be one of: {valid_levels}")
         return v_upper
-
 
 
 # Global configuration instance
@@ -73,14 +73,10 @@ def load_config(env_file: str | None = None) -> Config:
     """Load configuration from environment variables and optional .env file."""
     global _config
 
-    # Pydantic-settings automatically loads from .env file
-    # If a custom env_file is provided, we need to update the model config
-    if env_file and Path(env_file).exists():
-        # Create a temporary config class with custom env_file
-        class TempConfig(Config):
-            model_config = Config.model_config.copy()
-            model_config['env_file'] = env_file
-        _config = TempConfig()  # type: ignore[call-arg]
+    if env_file is not None:
+        if not Path(env_file).is_file():
+            raise ValueError(f"Configuration file not found: {env_file}")
+        _config = Config(_env_file=env_file)  # type: ignore[call-arg]
     else:
         _config = Config()  # type: ignore[call-arg]
 
@@ -102,8 +98,8 @@ def validate_config() -> None:
     if not config.url:
         raise ValueError("Listmonk URL is required (set LISTMONK_MCP_URL)")
     if not config.username:
-        raise ValueError("Listmonk API username is required (set LISTMONK_MCP_USERNAME)")
+        raise ValueError(
+            "Listmonk API username is required (set LISTMONK_MCP_USERNAME)"
+        )
     if not config.password:
         raise ValueError("Listmonk API token is required (set LISTMONK_MCP_PASSWORD)")
-
-

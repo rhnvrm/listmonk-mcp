@@ -1,0 +1,19 @@
+site_name = "Listmonk MCP"
+base_path = "/listmonk-mcp"
+footer_text = "[Source](https://github.com/rhnvrm/listmonk-mcp) · MIT"
+
+[agents]
+full = true
+
+[[links]]
+title = "GitHub"
+url = "https://github.com/rhnvrm/listmonk-mcp"
+icon = "github"
+
+[[topnav]]
+title = "Quick start"
+url = "/"
+
+[[topnav_more]]
+title = "PyPI"
+url = "https://pypi.org/project/listmonk-mcp/"

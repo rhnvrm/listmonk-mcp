@@ -7,11 +7,11 @@ x-db-credentials:
 services:
   # listmonk app
   app:
-    image: listmonk/listmonk:latest
+    image: ${LISTMONK_IMAGE:-listmonk/listmonk:v6.0.0}
     container_name: listmonk_app
     restart: unless-stopped
     ports:
-      - "9000:9000" # To change the externally exposed port, change to: $custom_port:9000
+      - "127.0.0.1:9000:9000" # To change the externally exposed port, change to: $custom_port:9000
     networks:
       - listmonk
     hostname: listmonk.example.com # Recommend using FQDN for hostname
@@ -50,8 +50,6 @@ services:
     image: postgres:17-alpine
     container_name: listmonk_db
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:5432:5432" # Only bind on the local interface. To connect to Postgres externally, change this to 0.0.0.0
     networks:
       - listmonk
     environment:

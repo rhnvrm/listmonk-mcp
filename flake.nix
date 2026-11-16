@@ -11,7 +11,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         
-        python = pkgs.python311;
+        python = pkgs.python313;
         
         pythonEnv = python.withPackages (ps: with ps; [
           pip
@@ -28,6 +28,8 @@
             
             # Development tools
             git
+            gnumake
+            go
             
             # Testing and formatting
             ruff

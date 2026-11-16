@@ -1,19 +1,27 @@
 """Listmonk API client abstraction using httpx."""
 
 import asyncio
+import json
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 from httpx import AsyncClient, Response
 
 from .config import Config
 
+_UNSET = object()
+
 
 class ListmonkAPIError(Exception):
     """Base exception for Listmonk API errors."""
 
-    def __init__(self, message: str, status_code: int | None = None, response: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        response: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.response = response
@@ -24,7 +32,7 @@ class ListmonkClient:
 
     def __init__(self, config: Config):
         self.config = config
-        self.base_url = config.url.rstrip('/')
+        self.base_url = config.url.rstrip("/")
         self._client: AsyncClient | None = None
 
     async def __aenter__(self) -> "ListmonkClient":
@@ -32,7 +40,12 @@ class ListmonkClient:
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -45,15 +58,18 @@ class ListmonkClient:
             timeout=self.config.timeout,
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
             headers={
-                "User-Agent": "Listmonk-MCP-Server/0.1.0",
+                "User-Agent": "Listmonk-MCP-Server/0.2.0",
                 "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"token {auth_token}"
-            }
+                "Authorization": f"token {auth_token}",
+            },
         )
 
         # Test connection with health check
-        await self.health_check()
+        try:
+            await self.health_check()
+        except BaseException:
+            await self.close()
+            raise
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -64,39 +80,48 @@ class ListmonkClient:
     def _get_client(self) -> AsyncClient:
         """Get the HTTP client, raising error if not connected."""
         if self._client is None:
-            raise RuntimeError("Client not connected. Call connect() first or use as async context manager.")
+            raise RuntimeError(
+                "Client not connected. Call connect() first or use as async context manager."
+            )
         return self._client
 
     def _build_url(self, endpoint: str) -> str:
         """Build full URL from endpoint."""
-        return urljoin(f"{self.base_url}/", endpoint.lstrip('/'))
+        return urljoin(f"{self.base_url}/", endpoint.lstrip("/"))
 
     async def _request(
         self,
         method: str,
         endpoint: str,
         params: dict[str, Any] | None = None,
-        json_data: Any = None,
-        retry_count: int = 0
+        json_data: Any = _UNSET,
+        retry_count: int = 0,
+        form_data: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Make HTTP request with retry logic and error handling."""
         client = self._get_client()
         url = self._build_url(endpoint)
 
         try:
-            response = await client.request(
-                method=method,
-                url=url,
-                params=params,
-                json=json_data
-            )
+            kwargs: dict[str, Any] = {}
+            if json_data is not _UNSET:
+                kwargs["content"] = json.dumps(json_data)
+                kwargs["headers"] = {"Content-Type": "application/json"}
+            if form_data is not None:
+                kwargs["data"] = form_data
+            response = await client.request(method, url, params=params, **kwargs)
 
             return await self._handle_response(response)
 
         except httpx.RequestError as e:
-            if retry_count < self.config.max_retries:
-                await asyncio.sleep(2 ** retry_count)  # Exponential backoff
-                return await self._request(method, endpoint, params, json_data, retry_count + 1)
+            if (
+                method.upper() in {"GET", "HEAD"}
+                and retry_count < self.config.max_retries
+            ):
+                await asyncio.sleep(2**retry_count)  # Exponential backoff
+                return await self._request(
+                    method, endpoint, params, json_data, retry_count + 1, form_data
+                )
 
             raise ListmonkAPIError(f"Request failed: {str(e)}") from e
 
@@ -105,17 +130,19 @@ class ListmonkClient:
         try:
             response_data = response.json()
         except Exception:
-            response_data = {"text": response.text}
+            response_data = {"data": response.text}
 
+        if not isinstance(response_data, dict):
+            response_data = {"data": response_data}
         if response.is_success:
-            return response_data  # type: ignore[no-any-return]
+            return response_data
 
         # Handle API errors
         error_message = response_data.get("message", f"HTTP {response.status_code}")
         raise ListmonkAPIError(
             message=error_message,
             status_code=response.status_code,
-            response=response_data
+            response=response_data,
         )
 
     # Health and Authentication
@@ -130,7 +157,7 @@ class ListmonkClient:
         per_page: int = 20,
         order_by: str = "created_at",
         order: str = "desc",
-        query: str | None = None
+        query: str | None = None,
     ) -> dict[str, Any]:
         """Get subscribers with pagination and filtering."""
         params = {
@@ -150,13 +177,16 @@ class ListmonkClient:
 
     async def get_subscriber_by_email(self, email: str) -> dict[str, Any]:
         """Get subscriber by email address."""
-        params = {"query": f"subscribers.email = '{email}'"}
+        escaped_email = email.replace("'", "''")
+        params = {"query": f"subscribers.email = '{escaped_email}'"}
         response = await self._request("GET", "/api/subscribers", params=params)
 
         if response.get("data", {}).get("results"):
             return {"data": response["data"]["results"][0]}
         else:
-            raise ListmonkAPIError(f"Subscriber with email {email} not found", status_code=404)
+            raise ListmonkAPIError(
+                f"Subscriber with email {email} not found", status_code=404
+            )
 
     async def create_subscriber(
         self,
@@ -165,7 +195,7 @@ class ListmonkClient:
         status: str = "enabled",
         lists: list[int] | None = None,
         attribs: dict[str, Any] | None = None,
-        preconfirm_subscriptions: bool = False
+        preconfirm_subscriptions: bool = False,
     ) -> dict[str, Any]:
         """Create a new subscriber."""
         data = {
@@ -174,7 +204,7 @@ class ListmonkClient:
             "status": status,
             "lists": lists or [],
             "attribs": attribs or {},
-            "preconfirm_subscriptions": preconfirm_subscriptions
+            "preconfirm_subscriptions": preconfirm_subscriptions,
         }
         return await self._request("POST", "/api/subscribers", json_data=data)
 
@@ -185,54 +215,72 @@ class ListmonkClient:
         name: str | None = None,
         status: str | None = None,
         lists: list[int] | None = None,
-        attribs: dict[str, Any] | None = None
+        attribs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Update an existing subscriber."""
-        data: dict[str, Any] = {}
-        if email is not None:
-            data["email"] = email
-        if name is not None:
-            data["name"] = name
-        if status is not None:
-            data["status"] = status
-        if lists is not None:
-            data["lists"] = lists
-        if attribs is not None:
-            data["attribs"] = attribs
-
-        return await self._request("PUT", f"/api/subscribers/{subscriber_id}", json_data=data)
+        """Update only supplied fields, preserving other subscriber data."""
+        return await self.patch_subscriber(
+            subscriber_id,
+            email=email,
+            name=name,
+            status=status,
+            lists=lists,
+            attribs=attribs,
+        )
 
     async def delete_subscriber(self, subscriber_id: int) -> dict[str, Any]:
         """Delete a subscriber."""
         return await self._request("DELETE", f"/api/subscribers/{subscriber_id}")
 
-    async def set_subscriber_status(self, subscriber_id: int, status: str) -> dict[str, Any]:
+    async def set_subscriber_status(
+        self, subscriber_id: int, status: str
+    ) -> dict[str, Any]:
         """Set subscriber status (enabled, disabled, blocklisted)."""
-        data = {"status": status}
-        return await self._request("PUT", f"/api/subscribers/{subscriber_id}", json_data=data)
+        return await self.patch_subscriber(subscriber_id, status=status)
 
     async def patch_subscriber(
         self,
         subscriber_id: int,
-        action: str,
-        target_list_ids: list[int] | None = None,
+        email: str | None = None,
+        name: str | None = None,
         status: str | None = None,
+        lists: list[int] | None = None,
+        attribs: dict[str, Any] | None = None,
+        preconfirm_subscriptions: bool = False,
     ) -> dict[str, Any]:
-        """Patch a subscriber's lists or status.
-
-        Args:
-            subscriber_id: Subscriber to patch.
-            action: One of "add", "remove", "unsubscribe" (lists),
-                or "blocklist" / "enable" (status).
-            target_list_ids: List IDs (for list-related actions).
-            status: New status (for status-related actions).
-        """
-        data: dict[str, Any] = {"action": action}
-        if target_list_ids is not None:
-            data["target_list_ids"] = target_list_ids
-        if status is not None:
-            data["status"] = status
-        return await self._request("PATCH", f"/api/subscribers/{subscriber_id}", json_data=data)
+        """PATCH fields directly; omitted lists preserve existing memberships."""
+        data: dict[str, Any] = {
+            key: value
+            for key, value in {
+                "email": email,
+                "name": name,
+                "status": status,
+                "lists": lists,
+                "attribs": attribs,
+            }.items()
+            if value is not None
+        }
+        if preconfirm_subscriptions:
+            data["preconfirm_subscriptions"] = True
+        try:
+            return await self._request(
+                "PATCH", f"/api/subscribers/{subscriber_id}", json_data=data
+            )
+        except ListmonkAPIError as e:
+            if e.status_code not in {404, 405}:
+                raise
+            # v6 has no PATCH route. Fetch first so PUT preserves required fields
+            # and memberships; a missing subscriber still fails on this GET.
+            current = (await self.get_subscriber(subscriber_id))["data"]
+            payload = {
+                key: current[key]
+                for key in ("email", "name", "status", "attribs")
+                if key in current
+            }
+            payload["lists"] = [item["id"] for item in current.get("lists", [])]
+            payload.update(data)
+            return await self._request(
+                "PUT", f"/api/subscribers/{subscriber_id}", json_data=payload
+            )
 
     async def subscriber_send_optin(self, subscriber_id: int) -> dict[str, Any]:
         """Trigger an opt-in confirmation email to a subscriber."""
@@ -290,7 +338,9 @@ class ListmonkClient:
     ) -> dict[str, Any]:
         """Delete subscribers matching an advanced SQL query expression."""
         data: dict[str, Any] = {"query": query, "list_ids": list_ids or []}
-        return await self._request("POST", "/api/subscribers/query/delete", json_data=data)
+        return await self._request(
+            "POST", "/api/subscribers/query/delete", json_data=data
+        )
 
     async def blocklist_subscribers_by_query(
         self,
@@ -299,7 +349,9 @@ class ListmonkClient:
     ) -> dict[str, Any]:
         """Blocklist subscribers matching an advanced SQL query expression."""
         data: dict[str, Any] = {"query": query, "list_ids": list_ids or []}
-        return await self._request("PUT", "/api/subscribers/query/blocklist", json_data=data)
+        return await self._request(
+            "PUT", "/api/subscribers/query/blocklist", json_data=data
+        )
 
     async def manage_subscriber_lists_by_query(
         self,
@@ -318,7 +370,9 @@ class ListmonkClient:
         }
         if status is not None:
             data["status"] = status
-        return await self._request("PUT", "/api/subscribers/query/lists", json_data=data)
+        return await self._request(
+            "PUT", "/api/subscribers/query/lists", json_data=data
+        )
 
     async def get_subscriber_bounces(self, subscriber_id: int) -> dict[str, Any]:
         """Get bounce records for a single subscriber."""
@@ -326,7 +380,9 @@ class ListmonkClient:
 
     async def delete_subscriber_bounces(self, subscriber_id: int) -> dict[str, Any]:
         """Delete all bounce records for a single subscriber."""
-        return await self._request("DELETE", f"/api/subscribers/{subscriber_id}/bounces")
+        return await self._request(
+            "DELETE", f"/api/subscribers/{subscriber_id}/bounces"
+        )
 
     # Bounce Operations
     async def get_bounces(
@@ -359,19 +415,33 @@ class ListmonkClient:
         """Delete a single bounce record."""
         return await self._request("DELETE", f"/api/bounces/{bounce_id}")
 
-    async def delete_bounces(self, bounce_ids: list[int] | None = None) -> dict[str, Any]:
-        """Delete bounce records. Pass None or empty list to delete ALL bounces."""
-        if bounce_ids:
-            params = {"id": [str(bid) for bid in bounce_ids]}
-            return await self._request("DELETE", "/api/bounces", params=params)
-        return await self._request("DELETE", "/api/bounces", params={"all": "true"})
+    async def delete_bounces(
+        self,
+        bounce_ids: list[int] | None = None,
+        *,
+        all: bool = False,
+    ) -> dict[str, Any]:
+        """Delete selected bounces, or explicitly request all=True."""
+        if bool(bounce_ids) == all:
+            raise ValueError(
+                "Provide bounce_ids or explicitly set all=True, exclusively"
+            )
+        params = {"id": bounce_ids} if bounce_ids else {"all": "true"}
+        return await self._request("DELETE", "/api/bounces", params=params)
 
     async def blocklist_bounced_subscribers(
-        self, bounce_ids: list[int] | None = None
+        self,
+        bounce_ids: list[int] | None = None,
+        *,
+        all: bool = False,
     ) -> dict[str, Any]:
-        """Blocklist subscribers attached to specific bounces (or all if empty)."""
-        data: dict[str, Any] = {"all": not bool(bounce_ids), "ids": bounce_ids or []}
-        return await self._request("PUT", "/api/bounces/blocklist", json_data=data)
+        """Blocklist subscribers for selected bounces, or explicitly all=True."""
+        if bool(bounce_ids) == all:
+            raise ValueError(
+                "Provide bounce_ids or explicitly set all=True, exclusively"
+            )
+        params = {"id": bounce_ids} if bounce_ids else None
+        return await self._request("PUT", "/api/bounces/blocklist", params=params)
 
     # Subscriber Import Operations
     async def get_import_status(self) -> dict[str, Any]:
@@ -426,21 +496,11 @@ class ListmonkClient:
         files = {"file": (file_path_obj.name, file_content, content_type)}
         data = {"params": _json.dumps(params)}
 
-        upload_client = AsyncClient(
-            timeout=self.config.timeout,
-            headers={
-                "Authorization": f"token {self.config.username}:{self.config.password}",
-                "User-Agent": "Listmonk-MCP-Server/0.1.0",
-                "Accept": "application/json",
-            },
-        )
         try:
-            response = await upload_client.post(url, files=files, data=data)
+            response = await self._get_client().post(url, files=files, data=data)
             return await self._handle_response(response)
         except httpx.RequestError as e:
-            raise ListmonkAPIError(f"Subscriber import failed: {str(e)}") from e
-        finally:
-            await upload_client.aclose()
+            raise ListmonkAPIError(f"Subscriber import failed: {e}") from e
 
     async def stop_import(self) -> dict[str, Any]:
         """Stop the currently running subscriber import."""
@@ -456,7 +516,7 @@ class ListmonkClient:
         minimal: bool = False,
         tags: list[str] | None = None,
         order_by: str | None = None,
-        order: str | None = None
+        order: str | None = None,
     ) -> dict[str, Any]:
         """Get mailing lists with pagination and optional filters."""
         params: dict[str, Any] = {
@@ -488,7 +548,7 @@ class ListmonkClient:
         type: str = "public",
         optin: str = "single",
         tags: list[str] | None = None,
-        description: str | None = None
+        description: str | None = None,
     ) -> dict[str, Any]:
         """Create a new mailing list."""
         data = {
@@ -496,6 +556,7 @@ class ListmonkClient:
             "type": type,
             "optin": optin,
             "tags": tags or [],
+            "messenger": "email",
         }
         if description:
             data["description"] = description
@@ -509,10 +570,15 @@ class ListmonkClient:
         type: str | None = None,
         optin: str | None = None,
         tags: list[str] | None = None,
-        description: str | None = None
+        description: str | None = None,
     ) -> dict[str, Any]:
         """Update an existing mailing list."""
-        data: dict[str, Any] = {}
+        current = (await self.get_list(list_id)).get("data", {})
+        data: dict[str, Any] = {
+            key: current[key]
+            for key in ("name", "type", "optin", "tags", "description", "status")
+            if key in current
+        }
         if name is not None:
             data["name"] = name
         if type is not None:
@@ -530,17 +596,16 @@ class ListmonkClient:
         """Delete a mailing list."""
         return await self._request("DELETE", f"/api/lists/{list_id}")
 
-    async def get_list_subscribers(self, list_id: int, page: int = 1, per_page: int = 20) -> dict[str, Any]:
+    async def get_list_subscribers(
+        self, list_id: int, page: int = 1, per_page: int = 20
+    ) -> dict[str, Any]:
         """Get subscribers for a specific list."""
         params = {"page": page, "per_page": per_page, "list_id": list_id}
         return await self._request("GET", "/api/subscribers", params=params)
 
     # Campaign Operations
     async def get_campaigns(
-        self,
-        page: int = 1,
-        per_page: int = 20,
-        status: str | None = None
+        self, page: int = 1, per_page: int = 20, status: str | None = None
     ) -> dict[str, Any]:
         """Get campaigns with pagination and filtering."""
         params: dict[str, Any] = {"page": page, "per_page": per_page}
@@ -562,7 +627,7 @@ class ListmonkClient:
         content_type: str = "richtext",
         body: str | None = None,
         template_id: int | None = None,
-        tags: list[str] | None = None
+        tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a new campaign."""
         data: dict[str, Any] = {
@@ -571,7 +636,8 @@ class ListmonkClient:
             "lists": lists,
             "type": type,
             "content_type": content_type,
-            "tags": tags or []
+            "tags": tags or [],
+            "messenger": "email",
         }
 
         if body:
@@ -588,39 +654,76 @@ class ListmonkClient:
         subject: str | None = None,
         lists: list[int] | None = None,
         body: str | None = None,
-        tags: list[str] | None = None
+        tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Update an existing campaign.
 
         If lists is not provided, fetches the current campaign's lists to preserve them.
         """
-        # If lists not provided, fetch current campaign to get existing lists
-        if lists is None:
-            current = await self.get_campaign(campaign_id)
-            campaign_data = current.get("data", {})
-            current_lists = campaign_data.get("lists", [])
-            lists = [lst.get("id") for lst in current_lists if lst.get("id")]
+        current = (await self.get_campaign(campaign_id)).get("data", {})
+        data = self._campaign_payload(current)
+        for key, value in {
+            "name": name,
+            "subject": subject,
+            "lists": lists,
+            "body": body,
+            "tags": tags,
+        }.items():
+            if value is not None:
+                data[key] = value
+        return await self._request(
+            "PUT", f"/api/campaigns/{campaign_id}", json_data=data
+        )
 
-        data: dict[str, Any] = {"lists": lists}
-        if name is not None:
-            data["name"] = name
-        if subject is not None:
-            data["subject"] = subject
-        if body is not None:
-            data["body"] = body
-        if tags is not None:
-            data["tags"] = tags
-
-        return await self._request("PUT", f"/api/campaigns/{campaign_id}", json_data=data)
+    @staticmethod
+    def _campaign_payload(campaign: dict[str, Any]) -> dict[str, Any]:
+        """Build writable campaign fields without copying server-managed state."""
+        keys = (
+            "name",
+            "subject",
+            "from_email",
+            "body",
+            "body_source",
+            "altbody",
+            "content_type",
+            "messenger",
+            "type",
+            "tags",
+            "template_id",
+            "headers",
+            "send_at",
+            "archive",
+            "archive_template_id",
+            "archive_meta",
+            "archive_slug",
+        )
+        data = {key: campaign[key] for key in keys if key in campaign}
+        data["lists"] = [
+            item["id"] if isinstance(item, dict) else item
+            for item in campaign.get("lists", [])
+        ]
+        if "media" in campaign:
+            data["media"] = [
+                item["id"] if isinstance(item, dict) else item
+                for item in campaign["media"] or []
+            ]
+        return data
 
     async def send_campaign(self, campaign_id: int) -> dict[str, Any]:
         """Send a campaign immediately."""
-        return await self._request("PUT", f"/api/campaigns/{campaign_id}/status", json_data={"status": "running"})
+        return await self._request(
+            "PUT",
+            f"/api/campaigns/{campaign_id}/status",
+            json_data={"status": "running"},
+        )
 
     async def schedule_campaign(self, campaign_id: int, send_at: str) -> dict[str, Any]:
         """Schedule a campaign for future delivery."""
-        data = {"status": "scheduled", "send_at": send_at}
-        return await self._request("PUT", f"/api/campaigns/{campaign_id}/status", json_data=data)
+        current = (await self.get_campaign(campaign_id)).get("data", {})
+        data = self._campaign_payload(current)
+        data["send_at"] = send_at
+        await self._request("PUT", f"/api/campaigns/{campaign_id}", json_data=data)
+        return await self.change_campaign_status(campaign_id, "scheduled")
 
     async def get_campaign_preview(self, campaign_id: int) -> dict[str, Any]:
         """Get campaign HTML preview."""
@@ -639,30 +742,21 @@ class ListmonkClient:
         pattern as update_campaign.
 
         Note: recipients must already exist as subscribers in listmonk;
-        the test handler looks them up by email and silently sends nothing
-        if no record matches.
+        the test handler looks them up by email and requires permission
+        to access those subscriber records.
         """
-        current = await self.get_campaign(campaign_id)
-        camp = current.get("data", {})
+        if not subscribers:
+            raise ValueError("At least one existing subscriber email is required")
+        current = (await self.get_campaign(campaign_id)).get("data", {})
+        data = self._campaign_payload(current)
+        data["subscribers"] = subscribers
+        return await self._request(
+            "POST", f"/api/campaigns/{campaign_id}/test", json_data=data
+        )
 
-        data: dict[str, Any] = {
-            "name": camp.get("name", ""),
-            "subject": camp.get("subject", ""),
-            "lists": [lst.get("id") for lst in camp.get("lists", []) if lst.get("id")],
-            "from_email": camp.get("from_email", ""),
-            "body": camp.get("body", ""),
-            "altbody": camp.get("altbody") or "",
-            "content_type": camp.get("content_type", "richtext"),
-            "messenger": camp.get("messenger", "email"),
-            "type": camp.get("type", "regular"),
-            "tags": camp.get("tags", []) or [],
-            "template_id": camp.get("template_id", 0),
-            "headers": camp.get("headers", []) or [],
-            "subscribers": subscribers,
-        }
-        return await self._request("POST", f"/api/campaigns/{campaign_id}/test", json_data=data)
-
-    async def change_campaign_status(self, campaign_id: int, status: str) -> dict[str, Any]:
+    async def change_campaign_status(
+        self, campaign_id: int, status: str
+    ) -> dict[str, Any]:
         """Change a campaign's status (draft, scheduled, running, paused, cancelled)."""
         return await self._request(
             "PUT",
@@ -686,7 +780,9 @@ class ListmonkClient:
             data["archive_meta"] = archive_meta
         if archive_slug is not None:
             data["archive_slug"] = archive_slug
-        return await self._request("PUT", f"/api/campaigns/{campaign_id}/archive", json_data=data)
+        return await self._request(
+            "PUT", f"/api/campaigns/{campaign_id}/archive", json_data=data
+        )
 
     async def delete_campaign(self, campaign_id: int) -> dict[str, Any]:
         """Delete a single campaign."""
@@ -705,23 +801,26 @@ class ListmonkClient:
         self,
         analytics_type: str,
         campaign_ids: list[int],
-        from_date: str | None = None,
-        to_date: str | None = None,
+        from_date: str,
+        to_date: str,
+        interval: str = "day",
+        unique: bool = False,
     ) -> dict[str, Any]:
-        """Get campaign analytics by type (views, clicks, links, bounces).
-
-        Args:
-            analytics_type: One of "views", "clicks", "links", "bounces".
-            campaign_ids: Campaigns to fetch analytics for.
-            from_date: Optional ISO date lower bound.
-            to_date: Optional ISO date upper bound.
-        """
-        params: dict[str, Any] = {"id": [str(cid) for cid in campaign_ids]}
-        if from_date is not None:
-            params["from"] = from_date
-        if to_date is not None:
-            params["to"] = to_date
-        return await self._request("GET", f"/api/campaigns/analytics/{analytics_type}", params=params)
+        """Get campaign analytics within a required date range, including v7 unique counts."""
+        if not campaign_ids:
+            raise ValueError("At least one campaign ID is required")
+        if analytics_type not in {"views", "clicks", "links", "bounces"}:
+            raise ValueError("Invalid analytics type")
+        params: dict[str, Any] = {
+            "id": campaign_ids,
+            "from": from_date,
+            "to": to_date,
+            "interval": interval,
+            "unique": str(unique).lower(),
+        }
+        return await self._request(
+            "GET", f"/api/campaigns/analytics/{analytics_type}", params=params
+        )
 
     # Template Operations
     async def get_templates(self) -> dict[str, Any]:
@@ -737,16 +836,17 @@ class ListmonkClient:
         name: str,
         body: str,
         type: str = "campaign",
-        is_default: bool = False
+        is_default: bool = False,
+        subject: str | None = None,
     ) -> dict[str, Any]:
         """Create a new email template."""
-        data = {
-            "name": name,
-            "body": body,
-            "type": type,
-            "is_default": is_default
-        }
-        return await self._request("POST", "/api/templates", json_data=data)
+        data = {"name": name, "body": body, "type": type, "is_default": is_default}
+        if subject is not None:
+            data["subject"] = subject
+        result = await self._request("POST", "/api/templates", json_data=data)
+        if is_default:
+            await self.set_default_template(result["data"]["id"])
+        return result
 
     async def update_template(
         self,
@@ -754,7 +854,7 @@ class ListmonkClient:
         name: str | None = None,
         body: str | None = None,
         is_default: bool | None = None,
-        subject: str | None = None
+        subject: str | None = None,
     ) -> dict[str, Any]:
         """Update an existing template.
 
@@ -771,7 +871,9 @@ class ListmonkClient:
             "name": name if name is not None else template_data.get("name", ""),
             "type": template_data.get("type", "campaign"),
             "body": body if body is not None else template_data.get("body", ""),
-            "is_default": is_default if is_default is not None else template_data.get("is_default", False),
+            "is_default": is_default
+            if is_default is not None
+            else template_data.get("is_default", False),
         }
 
         # Transactional templates require a subject field in PUT requests
@@ -781,7 +883,14 @@ class ListmonkClient:
         elif current_subject:
             data["subject"] = current_subject
 
-        return await self._request("PUT", f"/api/templates/{template_id}", json_data=data)
+        if "body_source" in template_data and body is None:
+            data["body_source"] = template_data["body_source"]
+        result = await self._request(
+            "PUT", f"/api/templates/{template_id}", json_data=data
+        )
+        if is_default:
+            await self.set_default_template(template_id)
+        return result
 
     async def delete_template(self, template_id: int) -> dict[str, Any]:
         """Delete a template."""
@@ -797,8 +906,8 @@ class ListmonkClient:
         template_type: str = "campaign",
     ) -> dict[str, Any]:
         """Render a preview of a template body without saving it."""
-        data = {"body": body, "type": template_type}
-        return await self._request("POST", "/api/templates/preview", json_data=data)
+        data = {"body": body, "template_type": template_type}
+        return await self._request("POST", "/api/templates/preview", form_data=data)
 
     # Settings & Admin Operations
     async def get_settings(self) -> dict[str, Any]:
@@ -823,11 +932,15 @@ class ListmonkClient:
         setting), NOT wrapped in {"value": ...}. Wrapping causes listmonk
         to store the whole object and breaks the field.
         """
-        return await self._request("PUT", f"/api/settings/{key}", json_data=value)
+        return await self._request(
+            "PUT", f"/api/settings/{quote(key, safe='')}", json_data=value
+        )
 
     async def test_smtp_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         """Send a test email through provided SMTP settings."""
-        return await self._request("POST", "/api/settings/smtp/test", json_data=settings)
+        return await self._request(
+            "POST", "/api/settings/smtp/test", json_data=settings
+        )
 
     async def reload_app(self) -> dict[str, Any]:
         """Trigger a hot-reload of the Listmonk app."""
@@ -854,20 +967,30 @@ class ListmonkClient:
         """Garbage collect subscribers.
 
         Args:
-            gc_type: One of "blocklisted", "orphan", "unconfirmed".
+            gc_type: One of "blocklisted", "orphan".
         """
+        if gc_type not in {"blocklisted", "orphan"}:
+            raise ValueError("gc_type must be blocklisted or orphan")
         return await self._request("DELETE", f"/api/maintenance/subscribers/{gc_type}")
 
-    async def gc_campaign_analytics(self, analytics_type: str) -> dict[str, Any]:
-        """Garbage collect campaign analytics ("views", "clicks", "links", "bounces", "all")."""
-        return await self._request("DELETE", f"/api/maintenance/analytics/{analytics_type}")
+    async def gc_campaign_analytics(
+        self, analytics_type: str, before: str
+    ) -> dict[str, Any]:
+        """Delete views/clicks/all older than a required RFC3339 timestamp."""
+        if analytics_type not in {"views", "clicks", "all"}:
+            raise ValueError("analytics_type must be views, clicks, or all")
+        return await self._request(
+            "DELETE",
+            f"/api/maintenance/analytics/{analytics_type}",
+            params={"before_date": before},
+        )
 
     async def gc_unconfirmed_subscriptions(self, before: str) -> dict[str, Any]:
-        """Delete unconfirmed double-opt-in subscriptions older than the given ISO timestamp."""
+        """Delete unconfirmed subscriptions older than an RFC3339 timestamp."""
         return await self._request(
             "DELETE",
             "/api/maintenance/subscriptions/unconfirmed",
-            params={"before": before},
+            params={"before_date": before},
         )
 
     # Transactional Email
@@ -876,23 +999,36 @@ class ListmonkClient:
         subscriber_email: str,
         template_id: int,
         data: dict[str, Any] | None = None,
-        content_type: str = "html"
+        content_type: str = "html",
     ) -> dict[str, Any]:
         """Send a transactional email."""
         payload = {
             "subscriber_email": subscriber_email,
             "template_id": template_id,
             "data": data or {},
-            "content_type": content_type
+            "content_type": content_type,
         }
         return await self._request("POST", "/api/tx", json_data=payload)
 
     # Media Operations
-    async def get_media(self) -> dict[str, Any]:
-        """Get all media files."""
-        return await self._request("GET", "/api/media")
+    async def get_media(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        query: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Get paginated media; v7 supports search and tags."""
+        params: dict[str, Any] = {"page": page, "per_page": per_page}
+        if query:
+            params["query"] = query
+        if tags:
+            params["tag"] = tags
+        return await self._request("GET", "/api/media", params=params)
 
-    async def upload_media(self, file_path: str, title: str | None = None) -> dict[str, Any]:
+    async def upload_media(
+        self, file_path: str, title: str | None = None
+    ) -> dict[str, Any]:
         """Upload a media file.
 
         Args:
@@ -912,61 +1048,47 @@ class ListmonkClient:
 
         # Determine content type from file extension
         content_types = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.gif': 'image/gif',
-            '.webp': 'image/webp',
-            '.svg': 'image/svg+xml',
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".svg": "image/svg+xml",
         }
         ext = file_path_obj.suffix.lower()
-        content_type = content_types.get(ext, 'application/octet-stream')
+        content_type = content_types.get(ext, "application/octet-stream")
 
         # Use filename as title if not provided
         if title is None:
             title = file_path_obj.name
 
         # Read file content
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             file_content = f.read()
 
         # Prepare multipart form data
-        files = {
-            'file': (file_path_obj.name, file_content, content_type)
-        }
+        files = {"file": (file_path_obj.name, file_content, content_type)}
         data = {}
         if title:
-            data['title'] = title
-
-        # Create a new client without Content-Type header for multipart upload
-        # The client will automatically set multipart/form-data with boundary
-        upload_client = AsyncClient(
-            timeout=self.config.timeout,
-            headers={
-                "Authorization": f"token {self.config.username}:{self.config.password}",
-                "User-Agent": "Listmonk-MCP-Server/0.1.0",
-                "Accept": "application/json",
-                # No Content-Type - will be set automatically by httpx for multipart
-            }
-        )
+            data["title"] = title
 
         try:
-            response = await upload_client.post(url, files=files, data=data)
+            response = await self._get_client().post(url, files=files, data=data)
             return await self._handle_response(response)
         except httpx.RequestError as e:
-            raise ListmonkAPIError(f"Media upload failed: {str(e)}") from e
-        finally:
-            await upload_client.aclose()
+            raise ListmonkAPIError(f"Media upload failed: {e}") from e
 
     async def update_media(self, media_id: int, title: str) -> dict[str, Any]:
-        """Update media file metadata (rename).
+        """Compatibility entry point for an unsupported operation."""
+        raise ValueError(
+            "Listmonk does not support media title changes. Use update_media_tags on v7 instead."
+        )
 
-        Args:
-            media_id: ID of the media file
-            title: New title for the media file
-        """
-        data = {"title": title}
-        return await self._request("PUT", f"/api/media/{media_id}", json_data=data)
+    async def update_media_tags(self, media_id: int, tags: list[str]) -> dict[str, Any]:
+        """Replace media tags (Listmonk v7+)."""
+        return await self._request(
+            "PUT", f"/api/media/{media_id}", json_data={"tags": tags}
+        )
 
     async def delete_media(self, media_id: int) -> dict[str, Any]:
         """Delete a media file.

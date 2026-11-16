@@ -2,49 +2,45 @@ name: Publish to PyPI
 
 on:
   push:
-    tags:
-      - 'v*'  # Triggers on version tags like v1.0.0, v0.1.0, etc.
+    tags: ['v*']
+
+permissions:
+  contents: read
 
 jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: check
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for trusted publishing
-      contents: write  # Required for creating releases
-    
+      id-token: write
+      contents: write
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        enable-cache: true
-        
-    - name: Sync dependencies
-      run: uv sync --extra dev
-      
-    - name: Run linting
-      run: uv run ruff check src/
-      
-    - name: Run type checking
-      run: uv run mypy src/
-      
-    - name: Build package
-      run: uv build
-      
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      # Uses PyPI's trusted publishing - no API token needed
-      # Just configure trusted publishing on PyPI for your repository
-      
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        generate_release_notes: true
-        make_latest: true
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.13'
+      - run: uv sync --frozen --extra dev
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --frozen python - <<'PY'
+          import os, tomllib
+          from listmonk_mcp import __version__
+          with open('pyproject.toml', 'rb') as f:
+              version = tomllib.load(f)['project']['version']
+          assert os.environ['RELEASE_TAG'] == f'v{version}'
+          assert __version__ == version
+          PY
+      - run: uv build
+      - run: uv run --frozen twine check dist/*
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "$RELEASE_TAG"

@@ -37,6 +37,27 @@ class FakeClient:
         self.campaign_request = kwargs
         return {"data": {"id": 101}}
 
+    async def update_campaign(self, **kwargs: object) -> dict[str, object]:
+        self.campaign_request = kwargs
+        return {"data": True}
+
+    async def get_campaign(self, campaign_id: int) -> dict[str, object]:
+        return {
+            "data": {
+                "id": campaign_id,
+                "name": "Weekly campaign",
+                "subject": "This week",
+                "from_email": "Shop Team <shop@example.com>",
+                "status": "draft",
+                "lists": [{"id": 7}],
+                "body": "Hello",
+            }
+        }
+
+    async def get_campaign_preview(self, campaign_id: int) -> dict[str, object]:
+        # Listmonk serves the preview as text/html; the client wraps it in "data".
+        return {"data": "<html><body>Rendered preview</body></html>"}
+
 
 @pytest.mark.asyncio
 async def test_get_mailing_lists_defaults_to_100_per_page(
@@ -119,3 +140,60 @@ async def test_create_campaign_rejects_empty_or_invalid_targets(
     assert result == "Error: Mailing list IDs must be positive integers."
     assert fake.resolved_ids == []
     assert fake.campaign_request is None
+
+
+@pytest.mark.asyncio
+async def test_create_campaign_passes_from_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    await server.create_campaign(
+        name="Weekly campaign",
+        subject="This week",
+        lists=[7],
+        body="Hello",
+        from_email="Shop Team <shop@example.com>",
+    )
+
+    assert fake.campaign_request is not None
+    assert fake.campaign_request["from_email"] == "Shop Team <shop@example.com>"
+
+
+@pytest.mark.asyncio
+async def test_update_campaign_passes_from_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    result = await server.update_campaign(
+        campaign_id=101, from_email="Shop Team <shop@example.com>"
+    )
+
+    assert result == "Successfully updated campaign 101"
+    assert fake.campaign_request is not None
+    assert fake.campaign_request["from_email"] == "Shop Team <shop@example.com>"
+
+
+@pytest.mark.asyncio
+async def test_get_campaign_shows_sender(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    result = await server.get_campaign(101)
+
+    assert "From: Shop Team <shop@example.com>" in result
+
+
+@pytest.mark.asyncio
+async def test_campaign_preview_resource_renders_html_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    result = await server.get_campaign_preview("101")
+
+    assert "<html><body>Rendered preview</body></html>" in result

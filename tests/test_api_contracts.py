@@ -314,3 +314,44 @@ async def test_unsupported_media_title_does_not_report_success(
 ) -> None:
     with pytest.raises(ValueError, match="does not support"):
         await client.update_media(7, "New title")
+
+
+async def test_campaign_create_sends_from_email(
+    client: ListmonkClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(json={"data": {"id": 42}})
+    await client.create_campaign(
+        "Weekly", "News", [7], from_email="Shop Team <shop@example.com>"
+    )
+    payload = json.loads(httpx_mock.get_request().content)
+    assert payload["from_email"] == "Shop Team <shop@example.com>"
+
+
+async def test_campaign_create_without_from_email_uses_server_default(
+    client: ListmonkClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(json={"data": {"id": 42}})
+    await client.create_campaign("Weekly", "News", [7])
+    assert "from_email" not in json.loads(httpx_mock.get_request().content)
+
+
+async def test_campaign_update_overrides_from_email(
+    client: ListmonkClient, httpx_mock: HTTPXMock
+) -> None:
+    original = {
+        "name": "Weekly",
+        "subject": "News",
+        "lists": [{"id": 7}],
+        "body": "Hello",
+        "from_email": "news@example.com",
+        "content_type": "html",
+        "messenger": "email",
+    }
+    httpx_mock.add_response(json={"data": original})
+    httpx_mock.add_response(json={"data": True})
+    await client.update_campaign(42, from_email="Shop Team <shop@example.com>")
+    assert json.loads(httpx_mock.get_requests()[1].content) == {
+        **original,
+        "from_email": "Shop Team <shop@example.com>",
+        "lists": [7],
+    }

@@ -1062,6 +1062,8 @@ async def get_campaign(campaign_id: int) -> str:
         return f"""Campaign ID: {campaign.get("id")}
 Name: {campaign.get("name")}
 Subject: {campaign.get("subject")}
+From: {campaign.get("from_email")}
+Messenger: {campaign.get("messenger", "email")}
 Status: {campaign.get("status")}
 Template ID: {campaign.get("template_id")}
 Lists: [{lists_str}]
@@ -1083,6 +1085,9 @@ async def create_campaign(
     body: str | None = None,
     template_id: int | None = None,
     tags: list[str] | None = None,
+    from_email: str | None = None,
+    messenger: str | None = None,
+    altbody: str | None = None,
 ) -> str:
     """
     Create a new email campaign.
@@ -1096,6 +1101,11 @@ async def create_campaign(
         body: Campaign content body
         template_id: Template ID to use (optional)
         tags: Campaign tags
+        from_email: Sender, e.g. "Name <sender@example.com>". Defaults to the
+            sender configured in Listmonk settings.
+        messenger: Messenger to send through: "email" (default) or another
+            messenger enabled in Listmonk, such as a named SMTP server.
+        altbody: Plain-text alternative body sent alongside the main body.
     """
 
     async def _create_campaign_logic() -> str:
@@ -1127,6 +1137,9 @@ async def create_campaign(
             body=body,
             template_id=template_id,
             tags=tags or [],
+            from_email=from_email,
+            messenger=messenger,
+            altbody=altbody,
         )
 
         campaign_data = result.get("data", {})
@@ -1151,6 +1164,9 @@ async def update_campaign(
     lists: list[int] | None = None,
     body: str | None = None,
     tags: list[str] | None = None,
+    from_email: str | None = None,
+    messenger: str | None = None,
+    altbody: str | None = None,
 ) -> str:
     """
     Update an existing campaign.
@@ -1162,6 +1178,9 @@ async def update_campaign(
         lists: New list of mailing list IDs
         body: New campaign content
         tags: New campaign tags
+        from_email: New sender, e.g. "Name <sender@example.com>"
+        messenger: New messenger, e.g. "email" or a named SMTP server
+        altbody: New plain-text alternative body
     """
 
     async def _update_campaign_logic() -> str:
@@ -1173,6 +1192,9 @@ async def update_campaign(
             lists=lists,
             body=body,
             tags=tags,
+            from_email=from_email,
+            messenger=messenger,
+            altbody=altbody,
         )
 
         return f"Successfully updated campaign {campaign_id}"
@@ -1450,6 +1472,8 @@ async def get_campaign_by_id(campaign_id: str) -> str:
 **ID:** {campaign.get("id")}
 **Name:** {campaign.get("name")}
 **Subject:** {campaign.get("subject")}
+**From:** {campaign.get("from_email")}
+**Messenger:** {campaign.get("messenger", "email")}
 **Status:** {campaign.get("status")}
 **Type:** {campaign.get("type", "regular")}
 **Content Type:** {campaign.get("content_type", "richtext")}
@@ -1486,8 +1510,11 @@ async def get_campaign_preview(campaign_id: str) -> str:
         client = get_client()
         result = await client.get_campaign_preview(int(campaign_id))
 
-        preview_data = result.get("data", {})
-        preview_html = preview_data.get("preview", "No preview available")
+        # Listmonk serves the preview as text/html, which the client wraps in "data".
+        preview_data = result.get("data")
+        if isinstance(preview_data, dict):
+            preview_data = preview_data.get("preview")
+        preview_html = preview_data or "No preview available"
 
         return f"""# Campaign Preview
 

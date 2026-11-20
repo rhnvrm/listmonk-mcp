@@ -468,6 +468,11 @@ Stop the currently running subscriber import.
         body: Campaign content body
         template_id: Template ID to use (optional)
         tags: Campaign tags
+        from_email: Sender, e.g. "Name <sender@example.com>". Defaults to the
+            sender configured in Listmonk settings.
+        messenger: Messenger to send through: "email" (default) or another
+            messenger enabled in Listmonk, such as a named SMTP server.
+        altbody: Plain-text alternative body sent alongside the main body.
     
 
 - `name`: required
@@ -478,6 +483,9 @@ Stop the currently running subscriber import.
 - `body`: optional; default `None`
 - `template_id`: optional; default `None`
 - `tags`: optional; default `None`
+- `from_email`: optional; default `None`
+- `messenger`: optional; default `None`
+- `altbody`: optional; default `None`
 
 ### `update_campaign`
 
@@ -491,6 +499,9 @@ Stop the currently running subscriber import.
         lists: New list of mailing list IDs
         body: New campaign content
         tags: New campaign tags
+        from_email: New sender, e.g. "Name <sender@example.com>"
+        messenger: New messenger, e.g. "email" or a named SMTP server
+        altbody: New plain-text alternative body
     
 
 - `campaign_id`: required
@@ -499,6 +510,9 @@ Stop the currently running subscriber import.
 - `lists`: optional; default `None`
 - `body`: optional; default `None`
 - `tags`: optional; default `None`
+- `from_email`: optional; default `None`
+- `messenger`: optional; default `None`
+- `altbody`: optional; default `None`
 
 ### `send_campaign`
 

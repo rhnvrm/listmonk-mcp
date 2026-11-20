@@ -48,6 +48,7 @@ class FakeClient:
                 "name": "Weekly campaign",
                 "subject": "This week",
                 "from_email": "Shop Team <shop@example.com>",
+                "messenger": "bulk",
                 "status": "draft",
                 "lists": [{"id": 7}],
                 "body": "Hello",
@@ -197,3 +198,51 @@ async def test_campaign_preview_resource_renders_html_response(
     result = await server.get_campaign_preview("101")
 
     assert "<html><body>Rendered preview</body></html>" in result
+
+
+@pytest.mark.asyncio
+async def test_create_campaign_passes_messenger_and_altbody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    await server.create_campaign(
+        name="Weekly campaign",
+        subject="This week",
+        lists=[7],
+        body="<p>Hello</p>",
+        messenger="bulk",
+        altbody="Hello",
+    )
+
+    assert fake.campaign_request is not None
+    assert fake.campaign_request["messenger"] == "bulk"
+    assert fake.campaign_request["altbody"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_update_campaign_passes_messenger_and_altbody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    result = await server.update_campaign(
+        campaign_id=101, messenger="bulk", altbody="Hello"
+    )
+
+    assert result == "Successfully updated campaign 101"
+    assert fake.campaign_request is not None
+    assert fake.campaign_request["messenger"] == "bulk"
+    assert fake.campaign_request["altbody"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_get_campaign_shows_messenger(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    result = await server.get_campaign(101)
+
+    assert "Messenger: bulk" in result

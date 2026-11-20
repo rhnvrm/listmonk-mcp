@@ -629,10 +629,13 @@ class ListmonkClient:
         template_id: int | None = None,
         tags: list[str] | None = None,
         from_email: str | None = None,
+        messenger: str | None = None,
+        altbody: str | None = None,
     ) -> dict[str, Any]:
         """Create a new campaign.
 
         Without from_email, Listmonk uses the default sender from its settings.
+        Without messenger, the campaign goes through the default "email" messenger.
         """
         data: dict[str, Any] = {
             "name": name,
@@ -641,11 +644,13 @@ class ListmonkClient:
             "type": type,
             "content_type": content_type,
             "tags": tags or [],
-            "messenger": "email",
+            "messenger": messenger or "email",
         }
 
         if body:
             data["body"] = body
+        if altbody:
+            data["altbody"] = altbody
         if template_id:
             data["template_id"] = template_id
         if from_email:
@@ -662,6 +667,8 @@ class ListmonkClient:
         body: str | None = None,
         tags: list[str] | None = None,
         from_email: str | None = None,
+        messenger: str | None = None,
+        altbody: str | None = None,
     ) -> dict[str, Any]:
         """Update an existing campaign.
 
@@ -676,6 +683,8 @@ class ListmonkClient:
             "body": body,
             "tags": tags,
             "from_email": from_email,
+            "messenger": messenger,
+            "altbody": altbody,
         }.items():
             if value is not None:
                 data[key] = value
